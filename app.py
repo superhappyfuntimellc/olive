@@ -1313,6 +1313,9 @@ def init_state() -> None:
         "vb_style_on": True,
         "writing_style": "Neutral",
         "ai_intensity": 0.75,
+        "trained_voice": "None",
+        "voice_lane": "Narration",
+        "voice_sample": "",
         "voices": rebuild_vectors_in_voice_vault(default_voice_vault()),
         "style_banks": rebuild_vectors_in_style_banks(default_style_banks()),
         "story_bible_lock": True,
@@ -1856,10 +1859,15 @@ def main_ui() -> None:
         key="vb_style_on",
         on_change=mark_dirty,
     )
+    writing_styles = ["Neutral", "Crisp", "Flowing"]
+    current_style = st.session_state.get("writing_style", "Neutral")
+    style_idx = (
+        writing_styles.index(current_style) if current_style in writing_styles else 0
+    )
     st.sidebar.selectbox(
         "Writing style",
-        ["Neutral", "Crisp", "Flowing"],
-        index=0,
+        writing_styles,
+        index=style_idx,
         key="writing_style",
         on_change=mark_dirty,
     )
@@ -2322,10 +2330,16 @@ def main_ui() -> None:
             key="trained_voice",
             on_change=mark_dirty,
         )
+        current_lane = st.session_state.get("voice_lane", "Narration")
+        lane_idx = (
+            LANES.index(current_lane)
+            if current_lane in LANES
+            else LANES.index("Narration")
+        )
         st.selectbox(
             "Lane",
             options=LANES,
-            index=LANES.index("Narration"),
+            index=lane_idx,
             key="voice_lane",
             on_change=mark_dirty,
         )
