@@ -1,3 +1,23 @@
+# Secrets
 .streamlit/secrets.toml
 streamlit/.secrets.toml
+
+# Runtime data
 autosave/
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
