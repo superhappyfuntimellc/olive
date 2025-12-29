@@ -57,7 +57,34 @@ def require_openai_key() -> str:
 st.set_page_config(
     page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded"
 )
-st.markdown("", unsafe_allow_html=True)  # keep your CSS injection here if you want
+
+# Keyboard shortcut handler for undo/redo
+KEYBOARD_SHORTCUTS = """
+<script>
+document.addEventListener('keydown', function(e) {
+    // Ctrl+Z or Cmd+Z for Undo
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        const undoButton = window.parent.document.querySelector('[data-testid="baseButton-secondary"]:not([disabled])');
+        if (undoButton && undoButton.textContent.includes('Undo')) {
+            undoButton.click();
+        }
+    }
+    // Ctrl+Y or Cmd+Shift+Z for Redo
+    if (((e.ctrlKey || e.metaKey) && e.key === 'y') || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z')) {
+        e.preventDefault();
+        const buttons = window.parent.document.querySelectorAll('[data-testid="baseButton-secondary"]:not([disabled])');
+        for (let btn of buttons) {
+            if (btn.textContent.includes('Redo')) {
+                btn.click();
+                break;
+            }
+        }
+    }
+});
+</script>
+"""
+st.markdown(KEYBOARD_SHORTCUTS, unsafe_allow_html=True)
 
 # ============================================================
 # GLOBALS
@@ -470,6 +497,9 @@ def load_workspace_into_session() -> None:
     st.session_state.project_id = None
     st.session_state.project_title = "—"
     st.session_state.main_text = w.get("draft", "") or ""
+    # Initialize undo history with loaded text
+    st.session_state._undo_history = [st.session_state.main_text]
+    st.session_state._redo_history = []
     st.session_state.synopsis = sb.get("synopsis", "") or ""
     st.session_state.genre_style_notes = sb.get("genre_style_notes", "") or ""
     st.session_state.world = sb.get("world", "") or ""
@@ -497,6 +527,68 @@ def reset_workspace_story_bible(keep_templates: bool = True) -> None:
     st.session_state.sb_workspace = neww
     if in_workspace_mode():
         load_workspace_into_session()
+    mark_dirty()
+
+
+# ============================================================
+# UNDO / REDO SUPPORT
+# ============================================================
+def push_undo_history(text: str) -> None:
+    """Push current text to undo history stack."""
+    history = st.session_state.get("_undo_history", [])
+    # Avoid duplicate consecutive entries
+    if not history or history[-1] != text:
+        history.append(text)
+        # Keep history bounded to 50 states
+        if len(history) > 50:
+            history.pop(0)
+        st.session_state._undo_history = history
+        # Clear redo stack when new change is made
+        st.session_state._redo_history = []
+
+
+def undo_text() -> None:
+    """Undo last text change."""
+    undo_history = st.session_state.get("_undo_history", [])
+    if len(undo_history) > 1:
+        # Pop current state and save to redo
+        current = undo_history.pop()
+        redo_history = st.session_state.get("_redo_history", [])
+        redo_history.append(current)
+        st.session_state._redo_history = redo_history
+        # Restore previous state
+        st.session_state.main_text = undo_history[-1]
+        st.session_state._undo_history = undo_history
+        mark_dirty()
+
+
+def redo_text() -> None:
+    """Redo previously undone text change."""
+    redo_history = st.session_state.get("_redo_history", [])
+    if redo_history:
+        # Pop from redo and restore
+        text = redo_history.pop()
+        undo_history = st.session_state.get("_undo_history", [])
+        undo_history.append(text)
+        st.session_state._undo_history = undo_history
+        st.session_state._redo_history = redo_history
+        st.session_state.main_text = text
+        mark_dirty()
+
+
+def can_undo() -> bool:
+    """Check if undo is available."""
+    return len(st.session_state.get("_undo_history", [])) > 1
+
+
+def can_redo() -> bool:
+    """Check if redo is available."""
+    return len(st.session_state.get("_redo_history", [])) > 0
+
+
+def on_main_text_change() -> None:
+    """Callback for main text changes to track history."""
+    push_undo_history(st.session_state.main_text)
     mark_dirty()
 
 
@@ -529,6 +621,8 @@ def init_state() -> None:
         "voices": rebuild_vectors_in_voice_vault(default_voice_vault()),
         "style_banks": rebuild_vectors_in_style_banks(default_style_banks()),
         "story_bible_lock": True,
+        "_undo_history": [""],
+        "_redo_history": [],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -842,12 +936,24 @@ def main_ui() -> None:
 
     with center:
         st.subheader("Writing desk")
+
+        # Undo/Redo controls
+        undo_col1, undo_col2, undo_col3 = st.columns([1, 1, 4])
+        with undo_col1:
+            if st.button("↶ Undo", disabled=not can_undo(), help="Undo (Ctrl+Z)"):
+                undo_text()
+                st.rerun()
+        with undo_col2:
+            if st.button("↷ Redo", disabled=not can_redo(), help="Redo (Ctrl+Y)"):
+                redo_text()
+                st.rerun()
+
         st.text_area(
             "Main text",
             value=st.session_state.main_text,
             height=440,
             key="main_text",
-            on_change=mark_dirty,
+            on_change=on_main_text_change,
         )
         st.markdown("**Actions**")
         action_col1, action_col2, action_col3 = st.columns(3)
