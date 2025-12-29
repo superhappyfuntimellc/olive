@@ -100,6 +100,206 @@ AUTOSAVE_MIN_INTERVAL_S = 12.0  # throttle rerun autosaves
 
 
 # ============================================================
+# SYSTEM CONTRACT - PROJECT INTEGRITY
+# ============================================================
+def init_system_contract() -> Dict[str, Any]:
+    """Initialize the System Contract that governs all project behavior."""
+    return {
+        "version": "1.0",
+        "created_ts": now_ts(),
+        "contract_rules": {
+            "user_instructions_are_law": True,
+            "project_settings_override_learning": True,
+            "intensity_controls_are_hard_limits": True,
+            "no_cross_project_leakage": True,
+            "consistency_across_sessions": True,
+        },
+        "project_settings": {
+            "locked": False,
+            "ai_intensity_max": 1.0,
+            "ai_intensity_min": 0.0,
+            "writing_style_locked": False,
+            "voice_selection_locked": False,
+            "learning_boundaries": {
+                "respect_intensity_limits": True,
+                "respect_style_locks": True,
+                "respect_voice_locks": True,
+            },
+        },
+        "isolation": {
+            "project_id": None,
+            "bay_isolation_enabled": True,
+            "voice_isolation_per_bay": True,
+        },
+    }
+
+
+def validate_contract_compliance(
+    operation: str, current_settings: Dict[str, Any]
+) -> bool:
+    """Validate that an operation complies with the System Contract."""
+    contract = st.session_state.get("_system_contract")
+    if not contract:
+        return True  # No contract, allow operation
+
+    project_settings = contract.get("project_settings", {})
+
+    # Check if project settings are locked
+    if project_settings.get("locked") and operation in [
+        "change_style",
+        "change_voice",
+        "change_intensity",
+    ]:
+        return False
+
+    # Check intensity limits
+    if operation == "set_intensity":
+        intensity = current_settings.get("intensity", 0.0)
+        max_intensity = project_settings.get("ai_intensity_max", 1.0)
+        min_intensity = project_settings.get("ai_intensity_min", 0.0)
+        if intensity > max_intensity or intensity < min_intensity:
+            return False
+
+    # Check style locks
+    if operation == "change_style" and project_settings.get("writing_style_locked"):
+        return False
+
+    # Check voice locks
+    if operation == "change_voice" and project_settings.get("voice_selection_locked"):
+        return False
+
+    return True
+
+
+def enforce_contract_on_learning(learning_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Enforce System Contract rules on learning data before applying."""
+    contract = st.session_state.get("_system_contract")
+    if not contract:
+        return learning_data
+
+    boundaries = contract.get("project_settings", {}).get("learning_boundaries", {})
+
+    # If learning must respect locks, check and constrain
+    if boundaries.get("respect_intensity_limits"):
+        # Ensure learned patterns don't suggest exceeding intensity limits
+        max_intensity = contract.get("project_settings", {}).get(
+            "ai_intensity_max", 1.0
+        )
+        if learning_data.get("suggested_intensity", 0.0) > max_intensity:
+            learning_data["suggested_intensity"] = max_intensity
+
+    return learning_data
+
+
+def lock_project_settings() -> None:
+    """Lock all project settings to prevent changes."""
+    contract = st.session_state.get("_system_contract")
+    if not contract:
+        contract = init_system_contract()
+        st.session_state._system_contract = contract
+
+    contract["project_settings"]["locked"] = True
+    mark_dirty()
+
+
+def unlock_project_settings() -> None:
+    """Unlock project settings to allow changes."""
+    contract = st.session_state.get("_system_contract")
+    if contract:
+        contract["project_settings"]["locked"] = False
+        mark_dirty()
+
+
+def set_intensity_limits(min_val: float, max_val: float) -> None:
+    """Set hard limits for AI intensity."""
+    contract = st.session_state.get("_system_contract")
+    if not contract:
+        contract = init_system_contract()
+        st.session_state._system_contract = contract
+
+    contract["project_settings"]["ai_intensity_min"] = max(0.0, min(min_val, 1.0))
+    contract["project_settings"]["ai_intensity_max"] = max(0.0, min(max_val, 1.0))
+
+    # Enforce current intensity within new limits
+    current_intensity = st.session_state.get("ai_intensity", 0.75)
+    if current_intensity < contract["project_settings"]["ai_intensity_min"]:
+        st.session_state.ai_intensity = contract["project_settings"]["ai_intensity_min"]
+    elif current_intensity > contract["project_settings"]["ai_intensity_max"]:
+        st.session_state.ai_intensity = contract["project_settings"]["ai_intensity_max"]
+
+    mark_dirty()
+
+
+def lock_writing_style() -> None:
+    """Lock writing style to prevent changes."""
+    contract = st.session_state.get("_system_contract")
+    if not contract:
+        contract = init_system_contract()
+        st.session_state._system_contract = contract
+
+    contract["project_settings"]["writing_style_locked"] = True
+    mark_dirty()
+
+
+def unlock_writing_style() -> None:
+    """Unlock writing style to allow changes."""
+    contract = st.session_state.get("_system_contract")
+    if contract:
+        contract["project_settings"]["writing_style_locked"] = False
+        mark_dirty()
+
+
+def lock_voice_selection() -> None:
+    """Lock voice selection to prevent changes."""
+    contract = st.session_state.get("_system_contract")
+    if not contract:
+        contract = init_system_contract()
+        st.session_state._system_contract = contract
+
+    contract["project_settings"]["voice_selection_locked"] = True
+    mark_dirty()
+
+
+def unlock_voice_selection() -> None:
+    """Unlock voice selection to allow changes."""
+    contract = st.session_state.get("_system_contract")
+    if contract:
+        contract["project_settings"]["voice_selection_locked"] = False
+        mark_dirty()
+
+
+def reset_system_contract() -> None:
+    """Reset System Contract to defaults."""
+    st.session_state._system_contract = init_system_contract()
+    mark_dirty()
+
+
+def get_contract_status() -> Dict[str, Any]:
+    """Get current System Contract status."""
+    contract = st.session_state.get("_system_contract")
+    if not contract:
+        return {
+            "exists": False,
+            "locked": False,
+            "intensity_limits": {"min": 0.0, "max": 1.0},
+            "style_locked": False,
+            "voice_locked": False,
+        }
+
+    project_settings = contract.get("project_settings", {})
+    return {
+        "exists": True,
+        "locked": project_settings.get("locked", False),
+        "intensity_limits": {
+            "min": project_settings.get("ai_intensity_min", 0.0),
+            "max": project_settings.get("ai_intensity_max", 1.0),
+        },
+        "style_locked": project_settings.get("writing_style_locked", False),
+        "voice_locked": project_settings.get("voice_selection_locked", False),
+    }
+
+
+# ============================================================
 # UTILS
 # ============================================================
 def now_ts() -> str:
@@ -1805,6 +2005,8 @@ def init_state() -> None:
         "_show_style_patterns": False,
         "_confirm_reset_learning": False,
         "_confirm_delete_voice": None,
+        "_system_contract": init_system_contract(),
+        "_show_contract_panel": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2329,6 +2531,13 @@ def main_ui() -> None:
         key="vb_style_on",
         on_change=mark_dirty,
     )
+
+    # Check contract for locks
+    contract_status = get_contract_status()
+    style_locked = contract_status["style_locked"] or contract_status["locked"]
+    voice_locked = contract_status["voice_locked"] or contract_status["locked"]
+    intensity_limits = contract_status["intensity_limits"]
+
     writing_styles = ["Neutral", "Crisp", "Flowing"]
     current_style = st.session_state.get("writing_style", "Neutral")
     style_idx = (
@@ -2340,15 +2549,22 @@ def main_ui() -> None:
         index=style_idx,
         key="writing_style",
         on_change=mark_dirty,
+        disabled=style_locked,
+        help="🔒 Locked by System Contract" if style_locked else None,
     )
     st.sidebar.slider(
         "AI intensity",
-        min_value=0.0,
-        max_value=1.0,
+        min_value=intensity_limits["min"],
+        max_value=intensity_limits["max"],
         value=float(st.session_state.ai_intensity),
         step=0.01,
         key="ai_intensity",
         on_change=mark_dirty,
+        help=(
+            f"Range limited to {intensity_limits['min']:.2f}-{intensity_limits['max']:.2f}"
+            if intensity_limits["min"] > 0.0 or intensity_limits["max"] < 1.0
+            else None
+        ),
     )
 
     st.sidebar.markdown("---")
@@ -2358,6 +2574,105 @@ def main_ui() -> None:
         key="story_bible_lock",
         on_change=mark_dirty,
     )
+
+    # System Contract Panel
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**⚖️ System Contract**")
+
+    contract_status = get_contract_status()
+
+    # Show contract status
+    if contract_status["locked"]:
+        st.sidebar.caption("🔒 Project settings locked")
+    else:
+        st.sidebar.caption("🔓 Project settings unlocked")
+
+    # Toggle contract panel
+    if st.sidebar.button(
+        "⚙️ Manage Contract", help="View and manage project integrity settings"
+    ):
+        st.session_state._show_contract_panel = not st.session_state.get(
+            "_show_contract_panel", False
+        )
+
+    # Contract management panel
+    if st.session_state.get("_show_contract_panel"):
+        with st.sidebar.expander("System Contract Settings", expanded=True):
+            st.caption("**Project Integrity Controls**")
+
+            # Master lock/unlock
+            if contract_status["locked"]:
+                if st.button("🔓 Unlock All Settings", key="unlock_all_settings"):
+                    unlock_project_settings()
+                    st.rerun()
+            else:
+                if st.button("🔒 Lock All Settings", key="lock_all_settings"):
+                    lock_project_settings()
+                    st.rerun()
+
+            st.markdown("---")
+            st.caption("**AI Intensity Limits**")
+            col1, col2 = st.columns(2)
+            with col1:
+                min_intensity = st.number_input(
+                    "Min",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=contract_status["intensity_limits"]["min"],
+                    step=0.05,
+                    key="contract_min_intensity",
+                )
+            with col2:
+                max_intensity = st.number_input(
+                    "Max",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=contract_status["intensity_limits"]["max"],
+                    step=0.05,
+                    key="contract_max_intensity",
+                )
+
+            if st.button("Apply Limits", key="apply_intensity_limits"):
+                set_intensity_limits(min_intensity, max_intensity)
+                st.success("Intensity limits applied")
+                st.rerun()
+
+            st.markdown("---")
+            st.caption("**Individual Locks**")
+
+            # Style lock
+            if contract_status["style_locked"]:
+                if st.button("🔓 Unlock Writing Style", key="unlock_style"):
+                    unlock_writing_style()
+                    st.rerun()
+            else:
+                if st.button("🔒 Lock Writing Style", key="lock_style"):
+                    lock_writing_style()
+                    st.rerun()
+
+            # Voice lock
+            if contract_status["voice_locked"]:
+                if st.button("🔓 Unlock Voice Selection", key="unlock_voice"):
+                    unlock_voice_selection()
+                    st.rerun()
+            else:
+                if st.button("🔒 Lock Voice Selection", key="lock_voice"):
+                    lock_voice_selection()
+                    st.rerun()
+
+            st.markdown("---")
+            if st.button(
+                "🔄 Reset Contract",
+                key="reset_contract",
+                help="Reset to default settings",
+            ):
+                reset_system_contract()
+                st.success("Contract reset to defaults")
+                st.rerun()
+
+            if st.button("✗ Close", key="close_contract_panel"):
+                st.session_state._show_contract_panel = False
+                st.rerun()
 
     # Top bar
     col1, col2 = st.columns([3, 1])
@@ -2788,6 +3103,11 @@ def main_ui() -> None:
 
     with right:
         st.subheader("Voice bible")
+
+        # Check contract for voice lock
+        contract_status = get_contract_status()
+        voice_locked = contract_status["voice_locked"] or contract_status["locked"]
+
         # Voice selection
         names = voice_names_for_selector()
         idx = 0
@@ -2799,6 +3119,8 @@ def main_ui() -> None:
             index=idx,
             key="trained_voice",
             on_change=mark_dirty,
+            disabled=voice_locked,
+            help="🔒 Locked by System Contract" if voice_locked else None,
         )
         current_lane = st.session_state.get("voice_lane", "Narration")
         lane_idx = (
