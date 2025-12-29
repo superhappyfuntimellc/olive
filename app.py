@@ -957,6 +957,164 @@ def export_to_pdf(text: str, filename: str) -> Optional[bytes]:
 
 
 # ============================================================
+# BAY TRANSFER & EXPORT
+# ============================================================
+def can_transfer_bay() -> bool:
+    """Check if current bay can be transferred to next bay."""
+    current_bay = st.session_state.get("active_bay", "NEW")
+    # Can transfer from ROUGH to EDIT, or EDIT to FINAL
+    return current_bay in ["ROUGH", "EDIT"]
+
+
+def get_next_bay() -> Optional[str]:
+    """Get the next bay in the workflow."""
+    current_bay = st.session_state.get("active_bay", "NEW")
+    if current_bay == "ROUGH":
+        return "EDIT"
+    elif current_bay == "EDIT":
+        return "FINAL"
+    return None
+
+
+def transfer_to_next_bay() -> bool:
+    """Transfer current draft to the next bay in the workflow."""
+    if not can_transfer_bay():
+        return False
+
+    current_bay = st.session_state.get("active_bay", "NEW")
+    next_bay = get_next_bay()
+
+    if not next_bay:
+        return False
+
+    # Check if next bay already has content
+    next_project = st.session_state.active_project_by_bay.get(next_bay)
+    if next_project:
+        # Next bay has content - need confirmation
+        st.session_state._transfer_needs_confirmation = True
+        st.session_state._transfer_target_bay = next_bay
+        return False
+
+    # Perform transfer
+    _execute_bay_transfer(next_bay)
+    return True
+
+
+def _execute_bay_transfer(target_bay: str) -> None:
+    """Execute the bay transfer (internal helper)."""
+    current_bay = st.session_state.get("active_bay", "NEW")
+
+    # Save current state to workspace
+    save_workspace_from_session()
+
+    # Create a copy of the current workspace for the target bay
+    current_workspace = st.session_state.sb_workspace.copy()
+
+    # Store in the target bay
+    st.session_state.active_project_by_bay[target_bay] = current_workspace
+
+    # Switch to the target bay
+    st.session_state.active_bay = target_bay
+
+    # Load the workspace (which is the same content we just transferred)
+    load_workspace_into_session()
+
+    mark_dirty()
+
+
+def get_export_filename() -> str:
+    """Generate export filename based on workspace title and bay."""
+    title = st.session_state.get("workspace_title", "")
+    bay = st.session_state.get("active_bay", "NEW")
+
+    if title:
+        base = re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "_")
+        return f"{base}_{bay.lower()}"
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"olivetti_{bay.lower()}_{timestamp}"
+
+
+# ============================================================
+# BAY TRANSFER & EXPORT
+# ============================================================
+def can_transfer_bay() -> bool:
+    """Check if current bay can be transferred to next bay."""
+    current_bay = st.session_state.get("active_bay", "NEW")
+    # Can transfer from ROUGH to EDIT, or EDIT to FINAL
+    return current_bay in ["ROUGH", "EDIT"]
+
+
+def get_next_bay() -> Optional[str]:
+    """Get the next bay in the workflow."""
+    current_bay = st.session_state.get("active_bay", "NEW")
+    if current_bay == "ROUGH":
+        return "EDIT"
+    elif current_bay == "EDIT":
+        return "FINAL"
+    return None
+
+
+def transfer_to_next_bay() -> bool:
+    """Transfer current draft to the next bay in the workflow."""
+    if not can_transfer_bay():
+        return False
+
+    current_bay = st.session_state.get("active_bay", "NEW")
+    next_bay = get_next_bay()
+
+    if not next_bay:
+        return False
+
+    # Check if next bay already has content
+    next_project = st.session_state.active_project_by_bay.get(next_bay)
+    if next_project:
+        # Next bay has content - need confirmation
+        st.session_state._transfer_needs_confirmation = True
+        st.session_state._transfer_target_bay = next_bay
+        return False
+
+    # Perform transfer
+    _execute_bay_transfer(next_bay)
+    return True
+
+
+def _execute_bay_transfer(target_bay: str) -> None:
+    """Execute the bay transfer (internal helper)."""
+    current_bay = st.session_state.get("active_bay", "NEW")
+
+    # Save current state to workspace
+    save_workspace_from_session()
+
+    # Create a copy of the current workspace for the target bay
+    current_workspace = st.session_state.sb_workspace.copy()
+
+    # Store in the target bay
+    st.session_state.active_project_by_bay[target_bay] = current_workspace
+
+    # Switch to the target bay
+    st.session_state.active_bay = target_bay
+
+    # Load the workspace (which is the same content we just transferred)
+    load_workspace_into_session()
+
+    mark_dirty()
+
+
+def get_export_filename() -> str:
+    """Generate export filename based on workspace title and bay."""
+    title = st.session_state.get("workspace_title", "")
+    bay = st.session_state.get("active_bay", "NEW")
+
+    if title:
+        base = re.sub(r"[^\w\s-]", "", title).strip().replace(" ", "_")
+        return f"{base}_{bay.lower()}"
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"olivetti_{bay.lower()}_{timestamp}"
+
+
+# ============================================================
 # UNDO / REDO SUPPORT
 # ============================================================
 def push_undo_history(text: str) -> None:
@@ -1056,6 +1214,9 @@ def init_state() -> None:
         "_show_cloud_download": False,
         "_cloud_save_name": "",
         "_selected_cloud_save": None,
+        "_transfer_needs_confirmation": False,
+        "_transfer_target_bay": None,
+        "_show_export_dialog": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1680,16 +1841,116 @@ def main_ui() -> None:
     with center:
         st.subheader("Writing desk")
 
+        # Top bar: Undo/Redo + Bay Transfer + Export
+        top_col1, top_col2, top_col3, top_col4 = st.columns([1, 1, 2, 2])
+
         # Undo/Redo controls
-        undo_col1, undo_col2, undo_col3 = st.columns([1, 1, 4])
-        with undo_col1:
+        with top_col1:
             if st.button("↶ Undo", disabled=not can_undo(), help="Undo (Ctrl+Z)"):
                 undo_text()
                 st.rerun()
-        with undo_col2:
+        with top_col2:
             if st.button("↷ Redo", disabled=not can_redo(), help="Redo (Ctrl+Y)"):
                 redo_text()
                 st.rerun()
+
+        # Bay Transfer button
+        with top_col3:
+            current_bay = st.session_state.get("active_bay", "NEW")
+            next_bay = get_next_bay()
+            if next_bay:
+                transfer_label = f"{current_bay} → {next_bay}"
+                if st.button(transfer_label, help=f"Move draft to {next_bay} bay"):
+                    if not transfer_to_next_bay():
+                        # Need confirmation - will show dialog below
+                        st.rerun()
+                    else:
+                        st.success(f"✓ Moved to {next_bay} bay")
+                        st.rerun()
+            else:
+                st.button("Transfer", disabled=True, help="No next bay available")
+
+        # Export button
+        with top_col4:
+            has_text = bool(st.session_state.get("main_text", "").strip())
+            if has_text:
+                export_filename = get_export_filename()
+                if st.button("📤 Export", help=f"Export as {export_filename}"):
+                    st.session_state._show_export_dialog = True
+            else:
+                st.button("📤 Export", disabled=True, help="No text to export")
+
+        # Transfer confirmation dialog
+        if st.session_state.get("_transfer_needs_confirmation"):
+            target_bay = st.session_state.get("_transfer_target_bay")
+            with st.expander(f"⚠️ {target_bay} Bay Already Has Content", expanded=True):
+                st.warning(
+                    f"The {target_bay} bay already contains a draft. Transfer will overwrite it."
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✓ Overwrite", key="confirm_transfer"):
+                        _execute_bay_transfer(target_bay)
+                        st.session_state._transfer_needs_confirmation = False
+                        st.session_state._transfer_target_bay = None
+                        st.success(f"✓ Moved to {target_bay} bay")
+                        st.rerun()
+                with col2:
+                    if st.button("✗ Cancel", key="cancel_transfer"):
+                        st.session_state._transfer_needs_confirmation = False
+                        st.session_state._transfer_target_bay = None
+                        st.rerun()
+
+        # Export dialog
+        if st.session_state.get("_show_export_dialog"):
+            with st.expander("📤 Export Draft", expanded=True):
+                export_filename = get_export_filename()
+                st.markdown(f"**Export as:** {export_filename}")
+                st.caption(f"Current bay: {st.session_state.get('active_bay', 'NEW')}")
+
+                # Export format selection
+                export_format = st.radio(
+                    "Format",
+                    ["TXT", "MD", "DOCX", "PDF"],
+                    horizontal=True,
+                    key="export_format_choice",
+                )
+
+                # Generate export data
+                current_text = st.session_state.get("main_text", "")
+                export_data = None
+                mime_type = "text/plain"
+                file_ext = export_format.lower()
+
+                if export_format == "TXT":
+                    export_data = export_to_txt(current_text, export_filename)
+                    mime_type = "text/plain"
+                elif export_format == "MD":
+                    export_data = export_to_md(current_text, export_filename)
+                    mime_type = "text/markdown"
+                elif export_format == "DOCX":
+                    export_data = export_to_docx(current_text, export_filename)
+                    mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                elif export_format == "PDF":
+                    export_data = export_to_pdf(current_text, export_filename)
+                    mime_type = "application/pdf"
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if export_data:
+                        st.download_button(
+                            label=f"⬇ Download {export_format}",
+                            data=export_data,
+                            file_name=f"{export_filename}.{file_ext}",
+                            mime=mime_type,
+                            key="export_download_btn",
+                        )
+                    else:
+                        st.button(f"⬇ Download {export_format}", disabled=True)
+                with col2:
+                    if st.button("Close", key="close_export_dialog"):
+                        st.session_state._show_export_dialog = False
+                        st.rerun()
 
         st.text_area(
             "Main text",
