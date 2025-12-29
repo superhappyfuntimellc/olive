@@ -1,0 +1,2 @@
+# Development dependencies
+black>=24.0.0

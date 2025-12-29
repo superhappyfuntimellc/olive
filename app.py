@@ -18,11 +18,13 @@ os.environ.setdefault("ms-appid", "olivetti-writing-desk")
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 
+
 def _get_openai_key_or_empty() -> str:
     try:
         return str(st.secrets.get("OPENAI_API_KEY", ""))  # type: ignore[attr-defined]
     except Exception:
         return ""
+
 
 def _get_openai_model() -> str:
     try:
@@ -30,10 +32,13 @@ def _get_openai_model() -> str:
     except Exception:
         return os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
 
+
 OPENAI_MODEL = _get_openai_model()
+
 
 def has_openai_key() -> bool:
     return bool(os.getenv("OPENAI_API_KEY") or _get_openai_key_or_empty())
+
 
 def require_openai_key() -> str:
     key = os.getenv("OPENAI_API_KEY") or _get_openai_key_or_empty()
@@ -45,10 +50,13 @@ def require_openai_key() -> str:
         st.stop()
     return key
 
+
 # ============================================================
 # CONFIG
 # ============================================================
-st.set_page_config(page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="Olivetti Desk", layout="wide", initial_sidebar_state="expanded"
+)
 st.markdown("", unsafe_allow_html=True)  # keep your CSS injection here if you want
 
 # ============================================================
@@ -63,14 +71,17 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB guardrail
 WORD_RE = re.compile(r"[A-Za-z']+")
 AUTOSAVE_MIN_INTERVAL_S = 12.0  # throttle rerun autosaves
 
+
 # ============================================================
 # UTILS
 # ============================================================
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+
 def now_unix() -> float:
     return time.time()
+
 
 def _normalize_text(s: str) -> str:
     t = (s or "").strip()
@@ -79,16 +90,19 @@ def _normalize_text(s: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     return t.strip()
 
+
 def _split_paragraphs(text: str) -> List[str]:
     t = _normalize_text(text)
     if not t:
         return []
     return [p.strip() for p in re.split(r"\n\s*\n", t, flags=re.MULTILINE) if p.strip()]
 
+
 def _safe_filename(s: str, fallback: str = "olivetti") -> str:
     s = re.sub(r"[^\w\- ]+", "", (s or "").strip()).strip()
     s = re.sub(r"\s+", "_", s)
     return s[:80] if s else fallback
+
 
 def _clamp_text(s: str, max_chars: int = 12000) -> str:
     s = s or ""
@@ -96,14 +110,17 @@ def _clamp_text(s: str, max_chars: int = 12000) -> str:
         return s
     return s[: max_chars - 40] + "\n\n… (truncated) …"
 
+
 def mark_dirty() -> None:
     st.session_state["_dirty"] = True
+
 
 # ============================================================
 # VECTOR / VOICE VAULT
 # ============================================================
 def _tokenize(text: str) -> List[str]:
     return [w.lower() for w in WORD_RE.findall(text or "")]
+
 
 def _hash_vec(text: str, dims: int = 512) -> List[float]:
     vec = [0.0] * dims
@@ -116,6 +133,7 @@ def _hash_vec(text: str, dims: int = 512) -> List[float]:
             vec[i] = 1.0 + math.log(v)
     return vec
 
+
 def _cosine(a: List[float], b: List[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
@@ -124,12 +142,14 @@ def _cosine(a: List[float], b: List[float]) -> float:
         return 0.0
     return dot / (na * nb)
 
+
 def default_voice_vault() -> Dict[str, Any]:
     ts = now_ts()
     return {
         "Voice A": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}},
         "Voice B": {"created_ts": ts, "lanes": {ln: [] for ln in LANES}},
     }
+
 
 def rebuild_vectors_in_voice_vault(compact_voices: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -143,9 +163,12 @@ def rebuild_vectors_in_voice_vault(compact_voices: Dict[str, Any]) -> Dict[str, 
                 txt = _normalize_text(s.get("text", ""))
                 if not txt:
                     continue
-                lanes_out[ln].append({"ts": s.get("ts") or now_ts(), "text": txt, "vec": _hash_vec(txt)})
+                lanes_out[ln].append(
+                    {"ts": s.get("ts") or now_ts(), "text": txt, "vec": _hash_vec(txt)}
+                )
         out[vname] = {"created_ts": created_ts, "lanes": lanes_out}
     return out
+
 
 def compact_voice_vault(voices: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -153,14 +176,20 @@ def compact_voice_vault(voices: Dict[str, Any]) -> Dict[str, Any]:
         lanes_out: Dict[str, Any] = {}
         for ln in LANES:
             samples = (v.get("lanes", {}) or {}).get(ln, []) or []
-            lanes_out[ln] = [{"ts": s.get("ts"), "text": s.get("text", "")} for s in samples if (s.get("text") or "").strip()]
+            lanes_out[ln] = [
+                {"ts": s.get("ts"), "text": s.get("text", "")}
+                for s in samples
+                if (s.get("text") or "").strip()
+            ]
         out[vname] = {"created_ts": v.get("created_ts"), "lanes": lanes_out}
     return out
+
 
 def voice_names_for_selector() -> List[str]:
     names = list((st.session_state.get("voices") or {}).keys())
     names = [n for n in names if n and n.strip()]
     return ["— None —"] + sorted(set(names), key=lambda x: x.lower())
+
 
 def add_voice_sample(voice_name: str, lane: str, text: str) -> bool:
     voice_name = (voice_name or "").strip()
@@ -171,17 +200,26 @@ def add_voice_sample(voice_name: str, lane: str, text: str) -> bool:
     if not text:
         return False
     if voice_name not in st.session_state.voices:
-        st.session_state.voices[voice_name] = {"created_ts": now_ts(), "lanes": {ln: [] for ln in LANES}}
-    st.session_state.voices[voice_name]["lanes"][lane].append({"ts": now_ts(), "text": text, "vec": _hash_vec(text)})
+        st.session_state.voices[voice_name] = {
+            "created_ts": now_ts(),
+            "lanes": {ln: [] for ln in LANES},
+        }
+    st.session_state.voices[voice_name]["lanes"][lane].append(
+        {"ts": now_ts(), "text": text, "vec": _hash_vec(text)}
+    )
     mark_dirty()
     return True
+
 
 # ============================================================
 # STYLE BANKS
 # ============================================================
 def default_style_banks() -> Dict[str, Any]:
     ts = now_ts()
-    return {s: {"created_ts": ts, "lanes": {ln: [] for ln in LANES}} for s in ENGINE_STYLES}
+    return {
+        s: {"created_ts": ts, "lanes": {ln: [] for ln in LANES}} for s in ENGINE_STYLES
+    }
+
 
 def rebuild_vectors_in_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
     src = banks or {}
@@ -213,6 +251,7 @@ def rebuild_vectors_in_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
         out[style] = {"created_ts": b.get("created_ts") or now_ts(), "lanes": new_lanes}
     return out if out else default_style_banks()
 
+
 def compact_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(banks, dict):
         return default_style_banks()
@@ -230,23 +269,87 @@ def compact_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
                 t = (it.get("text") or "").strip()
                 if not t:
                     continue
-                cleaned.append({"ts": it.get("ts") or now_ts(), "text": _clamp_text(t, 9000)})
+                cleaned.append(
+                    {"ts": it.get("ts") or now_ts(), "text": _clamp_text(t, 9000)}
+                )
             c_lanes[ln] = cleaned
         out[style] = {"created_ts": b.get("created_ts") or now_ts(), "lanes": c_lanes}
     return out
+
 
 # ============================================================
 # LANE DETECTION
 # ============================================================
 THOUGHT_WORDS = {
-    "think","thought","felt","wondered","realized","remembered","knew","noticed","decided","hoped","feared","wanted","imagined","could","should","would",
+    "think",
+    "thought",
+    "felt",
+    "wondered",
+    "realized",
+    "remembered",
+    "knew",
+    "noticed",
+    "decided",
+    "hoped",
+    "feared",
+    "wanted",
+    "imagined",
+    "could",
+    "should",
+    "would",
 }
 
 ACTION_VERBS = {
-    "run","ran","walk","walked","grab","grabbed","push","pushed","pull","pulled","slam","slammed","hit","struck","kick","kicked","turn","turned","snap","snapped",
-    "dive","dived","duck","ducked","rush","rushed","lunge","lunged","climb","climbed","drop","dropped","throw","threw","fire","fired","aim","aimed","break","broke",
-    "shatter","shattered","step","stepped","move","moved","reach","reached",
+    "run",
+    "ran",
+    "walk",
+    "walked",
+    "grab",
+    "grabbed",
+    "push",
+    "pushed",
+    "pull",
+    "pulled",
+    "slam",
+    "slammed",
+    "hit",
+    "struck",
+    "kick",
+    "kicked",
+    "turn",
+    "turned",
+    "snap",
+    "snapped",
+    "dive",
+    "dived",
+    "duck",
+    "ducked",
+    "rush",
+    "rushed",
+    "lunge",
+    "lunged",
+    "climb",
+    "climbed",
+    "drop",
+    "dropped",
+    "throw",
+    "threw",
+    "fire",
+    "fired",
+    "aim",
+    "aimed",
+    "break",
+    "broke",
+    "shatter",
+    "shattered",
+    "step",
+    "stepped",
+    "move",
+    "moved",
+    "reach",
+    "reached",
 }
+
 
 def detect_lane(paragraph: str) -> str:
     p = (paragraph or "").strip()
@@ -273,15 +376,22 @@ def detect_lane(paragraph: str) -> str:
             action_score += 1.6
         if "!" in p:
             action_score += 0.3
-    scores = {"Dialogue": dialogue_score, "Interiority": interior_score, "Action": action_score, "Narration": 0.25}
+    scores = {
+        "Dialogue": dialogue_score,
+        "Interiority": interior_score,
+        "Action": action_score,
+        "Narration": 0.25,
+    }
     lane = max(scores.items(), key=lambda kv: kv[1])[0]
     return "Narration" if scores[lane] < 0.9 else lane
+
 
 def current_lane_from_draft(text: str) -> str:
     paras = _split_paragraphs(text)
     if not paras:
         return "Narration"
     return detect_lane(paras[-1])
+
 
 # ============================================================
 # INTENSITY
@@ -295,9 +405,11 @@ def intensity_profile(x: float) -> str:
         return "HIGH: bolder choices, richer specificity; still obey canon and lane."
     return "MAX: aggressive originality and voice; still obey canon, no derailments."
 
+
 def temperature_from_intensity(x: float) -> float:
     x = max(0.0, min(1.0, float(x)))
     return 0.15 + (x * 0.95)
+
 
 # ============================================================
 # STORY BIBLE WORKSPACE
@@ -305,19 +417,31 @@ def temperature_from_intensity(x: float) -> float:
 def default_story_bible_workspace() -> Dict[str, Any]:
     ts = now_ts()
     return {
-        "workspace_story_bible_id": hashlib.md5(f"wsb|{ts}".encode("utf-8")).hexdigest()[:12],
+        "workspace_story_bible_id": hashlib.md5(
+            f"wsb|{ts}".encode("utf-8")
+        ).hexdigest()[:12],
         "workspace_story_bible_created_ts": ts,
         "title": "",
         "draft": "",
-        "story_bible": {"synopsis": "", "genre_style_notes": "", "world": "", "characters": "", "outline": ""},
+        "story_bible": {
+            "synopsis": "",
+            "genre_style_notes": "",
+            "world": "",
+            "characters": "",
+            "outline": "",
+        },
         "voice_sample": "",
         "ai_intensity": 0.75,
         "voices": default_voice_vault(),
         "style_banks": default_style_banks(),
     }
 
+
 def in_workspace_mode() -> bool:
-    return (st.session_state.active_bay == "NEW") and (st.session_state.project_id is None)
+    return (st.session_state.active_bay == "NEW") and (
+        st.session_state.project_id is None
+    )
+
 
 def save_workspace_from_session() -> None:
     w = st.session_state.sb_workspace or default_story_bible_workspace()
@@ -333,8 +457,12 @@ def save_workspace_from_session() -> None:
     w["voice_sample"] = st.session_state.voice_sample
     w["ai_intensity"] = float(st.session_state.ai_intensity)
     w["voices"] = compact_voice_vault(st.session_state.voices)
-    w["style_banks"] = compact_style_banks(st.session_state.get("style_banks") or rebuild_vectors_in_style_banks(default_style_banks()))
+    w["style_banks"] = compact_style_banks(
+        st.session_state.get("style_banks")
+        or rebuild_vectors_in_style_banks(default_style_banks())
+    )
     st.session_state.sb_workspace = w
+
 
 def load_workspace_into_session() -> None:
     w = st.session_state.sb_workspace or default_story_bible_workspace()
@@ -349,9 +477,14 @@ def load_workspace_into_session() -> None:
     st.session_state.outline = sb.get("outline", "") or ""
     st.session_state.voice_sample = w.get("voice_sample", "") or ""
     st.session_state.ai_intensity = float(w.get("ai_intensity", 0.75))
-    st.session_state.voices = rebuild_vectors_in_voice_vault(w.get("voices", default_voice_vault()))
-    st.session_state.style_banks = rebuild_vectors_in_style_banks(w.get("style_banks", default_style_banks()))
+    st.session_state.voices = rebuild_vectors_in_voice_vault(
+        w.get("voices", default_voice_vault())
+    )
+    st.session_state.style_banks = rebuild_vectors_in_style_banks(
+        w.get("style_banks", default_style_banks())
+    )
     st.session_state.workspace_title = w.get("title", "") or ""
+
 
 def reset_workspace_story_bible(keep_templates: bool = True) -> None:
     old = st.session_state.sb_workspace or default_story_bible_workspace()
@@ -365,6 +498,7 @@ def reset_workspace_story_bible(keep_templates: bool = True) -> None:
     if in_workspace_mode():
         load_workspace_into_session()
     mark_dirty()
+
 
 # ============================================================
 # SESSION INIT
@@ -400,12 +534,14 @@ def init_state() -> None:
         if k not in st.session_state:
             st.session_state[k] = v
 
+
 # ============================================================
 # AUTOSAVE / PERSISTENCE
 # ============================================================
 def ensure_autosave_dir() -> None:
     if not os.path.exists(AUTOSAVE_DIR):
         os.makedirs(AUTOSAVE_DIR, exist_ok=True)
+
 
 def autosave_state() -> None:
     ensure_autosave_dir()
@@ -415,9 +551,11 @@ def autosave_state() -> None:
             k: (
                 compact_voice_vault(v)
                 if k == "voices"
-                else compact_style_banks(v)
-                if k == "style_banks"
-                else st.session_state.get(k)
+                else (
+                    compact_style_banks(v)
+                    if k == "style_banks"
+                    else st.session_state.get(k)
+                )
             )
             for k, v in st.session_state.items()
             if k not in ("_rerun_count",)
@@ -429,6 +567,7 @@ def autosave_state() -> None:
     st.session_state["_autosave_unix"] = now_unix()
     st.session_state["_dirty"] = False
 
+
 def maybe_autosave_throttled() -> None:
     if not st.session_state.get("_dirty"):
         return
@@ -436,6 +575,7 @@ def maybe_autosave_throttled() -> None:
     if now_unix() - last < AUTOSAVE_MIN_INTERVAL_S:
         return
     autosave_state()
+
 
 def load_autosave() -> bool:
     if not os.path.exists(AUTOSAVE_PATH):
@@ -461,9 +601,13 @@ def load_autosave() -> bool:
             if k not in sess:
                 continue
             if k == "voices":
-                st.session_state.voices = rebuild_vectors_in_voice_vault(sess.get("voices", default_voice_vault()))
+                st.session_state.voices = rebuild_vectors_in_voice_vault(
+                    sess.get("voices", default_voice_vault())
+                )
             elif k == "style_banks":
-                st.session_state.style_banks = rebuild_vectors_in_style_banks(sess.get("style_banks", default_style_banks()))
+                st.session_state.style_banks = rebuild_vectors_in_style_banks(
+                    sess.get("style_banks", default_style_banks())
+                )
             else:
                 st.session_state[k] = sess.get(k)
         st.session_state.autosave_time = snap.get("saved_ts", now_ts())
@@ -472,6 +616,7 @@ def load_autosave() -> bool:
         return True
     except Exception:
         return False
+
 
 # ============================================================
 # OPENAI CALLS (optional, safe fallback)
@@ -507,6 +652,7 @@ Outline: {outline}
 """
     return _normalize_text(prompt_text.strip())
 
+
 def call_openai_text(user_prompt: str, system_prompt: str, temperature: float) -> str:
     if not has_openai_key():
         return "OpenAI key not configured. Set OPENAI_API_KEY to enable model features."
@@ -520,24 +666,30 @@ def call_openai_text(user_prompt: str, system_prompt: str, temperature: float) -
             "model": OPENAI_MODEL,
             "temperature": float(temperature),
             "input": [
-                {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": system_prompt}],
+                },
                 {"role": "user", "content": [{"type": "text", "text": user_prompt}]},
             ],
         }
         with httpx.Client(timeout=60.0) as client:
-            r = client.post("https://api.openai.com/v1/responses", headers=headers, json=payload)
+            r = client.post(
+                "https://api.openai.com/v1/responses", headers=headers, json=payload
+            )
             r.raise_for_status()
             data = r.json()
             # Extract text from response output
             out_texts: List[str] = []
-            for item in (data.get("output") or []):
-                for c in (item.get("content") or []):
+            for item in data.get("output") or []:
+                for c in item.get("content") or []:
                     if c.get("type") == "output_text":
                         out_texts.append(c.get("text", ""))
             text = _normalize_text("\n".join(out_texts))
             return text or "(No text returned.)"
     except Exception as e:
         return f"Model call failed. (Details: {e})"
+
 
 def do_action(action: str) -> None:
     draft = st.session_state.main_text or ""
@@ -553,8 +705,11 @@ def do_action(action: str) -> None:
     else:
         user_prompt = draft
     st.session_state.last_action = action
-    st.session_state.tool_output = call_openai_text(user_prompt=user_prompt, system_prompt=system_prompt, temperature=temperature)
+    st.session_state.tool_output = call_openai_text(
+        user_prompt=user_prompt, system_prompt=system_prompt, temperature=temperature
+    )
     mark_dirty()
+
 
 # ============================================================
 # UI
@@ -562,7 +717,13 @@ def do_action(action: str) -> None:
 def main_ui() -> None:
     st.sidebar.title("Olivetti Desk")
     st.sidebar.markdown("**Workspace**")
-    st.sidebar.selectbox("Active Bay", BAYS, index=BAYS.index(st.session_state.active_bay), key="active_bay", on_change=mark_dirty)
+    st.sidebar.selectbox(
+        "Active Bay",
+        BAYS,
+        index=BAYS.index(st.session_state.active_bay),
+        key="active_bay",
+        on_change=mark_dirty,
+    )
 
     c1, c2 = st.sidebar.columns(2)
     with c1:
@@ -576,8 +737,19 @@ def main_ui() -> None:
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Voice controls**")
-    st.sidebar.checkbox("Enable writing style", value=st.session_state.vb_style_on, key="vb_style_on", on_change=mark_dirty)
-    st.sidebar.selectbox("Writing style", ["Neutral", "Crisp", "Flowing"], index=0, key="writing_style", on_change=mark_dirty)
+    st.sidebar.checkbox(
+        "Enable writing style",
+        value=st.session_state.vb_style_on,
+        key="vb_style_on",
+        on_change=mark_dirty,
+    )
+    st.sidebar.selectbox(
+        "Writing style",
+        ["Neutral", "Crisp", "Flowing"],
+        index=0,
+        key="writing_style",
+        on_change=mark_dirty,
+    )
     st.sidebar.slider(
         "AI intensity",
         min_value=0.0,
@@ -589,7 +761,12 @@ def main_ui() -> None:
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.checkbox("Lock story bible editing", value=bool(st.session_state.story_bible_lock), key="story_bible_lock", on_change=mark_dirty)
+    st.sidebar.checkbox(
+        "Lock story bible editing",
+        value=bool(st.session_state.story_bible_lock),
+        key="story_bible_lock",
+        on_change=mark_dirty,
+    )
 
     # Top bar
     col1, col2 = st.columns([3, 1])
@@ -605,13 +782,53 @@ def main_ui() -> None:
 
     with left:
         st.subheader("Story bible")
-        st.text_input("Workspace title", value=st.session_state.workspace_title, key="workspace_title", on_change=mark_dirty)
+        st.text_input(
+            "Workspace title",
+            value=st.session_state.workspace_title,
+            key="workspace_title",
+            on_change=mark_dirty,
+        )
         locked = bool(st.session_state.story_bible_lock)
-        st.text_area("Synopsis", value=st.session_state.synopsis, height=110, key="synopsis", disabled=locked, on_change=mark_dirty)
-        st.text_area("Genre/style notes", value=st.session_state.genre_style_notes, height=110, key="genre_style_notes", disabled=locked, on_change=mark_dirty)
-        st.text_area("World", value=st.session_state.world, height=110, key="world", disabled=locked, on_change=mark_dirty)
-        st.text_area("Characters", value=st.session_state.characters, height=110, key="characters", disabled=locked, on_change=mark_dirty)
-        st.text_area("Outline", value=st.session_state.outline, height=110, key="outline", disabled=locked, on_change=mark_dirty)
+        st.text_area(
+            "Synopsis",
+            value=st.session_state.synopsis,
+            height=110,
+            key="synopsis",
+            disabled=locked,
+            on_change=mark_dirty,
+        )
+        st.text_area(
+            "Genre/style notes",
+            value=st.session_state.genre_style_notes,
+            height=110,
+            key="genre_style_notes",
+            disabled=locked,
+            on_change=mark_dirty,
+        )
+        st.text_area(
+            "World",
+            value=st.session_state.world,
+            height=110,
+            key="world",
+            disabled=locked,
+            on_change=mark_dirty,
+        )
+        st.text_area(
+            "Characters",
+            value=st.session_state.characters,
+            height=110,
+            key="characters",
+            disabled=locked,
+            on_change=mark_dirty,
+        )
+        st.text_area(
+            "Outline",
+            value=st.session_state.outline,
+            height=110,
+            key="outline",
+            disabled=locked,
+            on_change=mark_dirty,
+        )
         a, b = st.columns(2)
         with a:
             if st.button("Reset workspace"):
@@ -625,7 +842,13 @@ def main_ui() -> None:
 
     with center:
         st.subheader("Writing desk")
-        st.text_area("Main text", value=st.session_state.main_text, height=440, key="main_text", on_change=mark_dirty)
+        st.text_area(
+            "Main text",
+            value=st.session_state.main_text,
+            height=440,
+            key="main_text",
+            on_change=mark_dirty,
+        )
         st.markdown("**Actions**")
         action_col1, action_col2, action_col3 = st.columns(3)
         if action_col1.button("WRITE"):
@@ -635,7 +858,12 @@ def main_ui() -> None:
         if action_col3.button("EXPAND"):
             do_action("EXPAND")
         st.markdown("**Tool output**")
-        st.text_area("Tool output", value=st.session_state.tool_output, height=160, key="tool_output_display")
+        st.text_area(
+            "Tool output",
+            value=st.session_state.tool_output,
+            height=160,
+            key="tool_output_display",
+        )
 
     with right:
         st.subheader("Voice bible")
@@ -644,23 +872,48 @@ def main_ui() -> None:
         idx = 0
         if st.session_state.get("trained_voice") in names:
             idx = names.index(st.session_state.get("trained_voice"))
-        st.selectbox("Trained voice", options=names, index=idx, key="trained_voice", on_change=mark_dirty)
-        st.selectbox("Lane", options=LANES, index=LANES.index("Narration"), key="voice_lane", on_change=mark_dirty)
-        st.text_area("Voice sample", value=st.session_state.voice_sample, height=140, key="voice_sample", on_change=mark_dirty)
+        st.selectbox(
+            "Trained voice",
+            options=names,
+            index=idx,
+            key="trained_voice",
+            on_change=mark_dirty,
+        )
+        st.selectbox(
+            "Lane",
+            options=LANES,
+            index=LANES.index("Narration"),
+            key="voice_lane",
+            on_change=mark_dirty,
+        )
+        st.text_area(
+            "Voice sample",
+            value=st.session_state.voice_sample,
+            height=140,
+            key="voice_sample",
+            on_change=mark_dirty,
+        )
         if st.button("Add voice sample"):
-            ok = add_voice_sample(st.session_state.trained_voice, st.session_state.voice_lane, st.session_state.voice_sample)
+            ok = add_voice_sample(
+                st.session_state.trained_voice,
+                st.session_state.voice_lane,
+                st.session_state.voice_sample,
+            )
             if ok:
                 st.success("Sample added")
             else:
                 st.warning("Pick a voice (not None) and add non-empty text.")
         st.markdown("---")
-        st.caption(f"Detected lane: {current_lane_from_draft(st.session_state.main_text)}")
+        st.caption(
+            f"Detected lane: {current_lane_from_draft(st.session_state.main_text)}"
+        )
         st.markdown("---")
         st.write(
             f"Autosave: {st.session_state.get('autosave_time', 'never')} • "
             f"Dirty: {bool(st.session_state.get('_dirty'))} • "
             f"Last action: {st.session_state.get('last_action', '—')}"
         )
+
 
 # ============================================================
 # STARTUP
@@ -675,6 +928,7 @@ def main() -> None:
     # Throttled background autosave for edits
     maybe_autosave_throttled()
     main_ui()
+
 
 if __name__ == "__main__":
     main()
