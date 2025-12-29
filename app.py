@@ -1043,13 +1043,23 @@ def count_words(text: str) -> int:
 
 
 def delete_current_draft() -> bool:
-    """Delete the current draft from the active bay."""
+    """Delete the current draft from the active bay (moves to trash)."""
     current_bay = st.session_state.get("active_bay", "NEW")
 
     # Check if there's content to delete
     current_text = st.session_state.get("main_text", "").strip()
     if not current_text:
         return False
+
+    # Save current workspace state to trash before deleting
+    save_workspace_from_session()
+    deleted_workspace = st.session_state.sb_workspace.copy()
+
+    st.session_state._deleted_draft_trash = {
+        "bay": current_bay,
+        "workspace": deleted_workspace,
+        "timestamp": datetime.now().isoformat(),
+    }
 
     # Clear the current session state
     st.session_state.main_text = ""
@@ -1060,6 +1070,37 @@ def delete_current_draft() -> bool:
     # Remove from active_project_by_bay if it exists
     if current_bay in st.session_state.active_project_by_bay:
         del st.session_state.active_project_by_bay[current_bay]
+
+    mark_dirty()
+    return True
+
+
+def can_undo_delete() -> bool:
+    """Check if there's a deleted draft that can be restored."""
+    trash = st.session_state.get("_deleted_draft_trash")
+    return trash is not None and "workspace" in trash
+
+
+def undo_delete() -> bool:
+    """Restore the last deleted draft from trash."""
+    if not can_undo_delete():
+        return False
+
+    trash = st.session_state._deleted_draft_trash
+    deleted_bay = trash["bay"]
+    deleted_workspace = trash["workspace"]
+
+    # Restore the workspace to its original bay
+    st.session_state.active_project_by_bay[deleted_bay] = deleted_workspace
+
+    # Switch to the restored bay
+    st.session_state.active_bay = deleted_bay
+
+    # Load the restored workspace into session
+    load_workspace_into_session()
+
+    # Clear the trash
+    st.session_state._deleted_draft_trash = None
 
     mark_dirty()
     return True
@@ -1248,6 +1289,7 @@ def init_state() -> None:
         "_transfer_target_bay": None,
         "_show_export_dialog": False,
         "_confirm_delete": False,
+        "_deleted_draft_trash": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2022,6 +2064,30 @@ def main_ui() -> None:
                 with col2:
                     if st.button("✗ Cancel", key="cancel_delete_btn"):
                         st.session_state._confirm_delete = False
+                        st.rerun()
+
+        # Undo delete notification
+        if can_undo_delete():
+            trash = st.session_state._deleted_draft_trash
+            deleted_bay = trash.get("bay", "unknown")
+            deleted_workspace = trash.get("workspace", {})
+            deleted_word_count = count_words(deleted_workspace.get("main_text", ""))
+
+            with st.expander(f"🗑️ Deleted Draft Available for Restore", expanded=True):
+                st.info(
+                    f"Deleted draft from {deleted_bay} bay ({deleted_word_count:,} words) can be restored."
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button(
+                        "↶ Undo Delete", key="undo_delete_btn", type="primary"
+                    ):
+                        if undo_delete():
+                            st.success(f"✓ Draft restored to {deleted_bay} bay")
+                            st.rerun()
+                with col2:
+                    if st.button("🗑️ Clear Trash", key="clear_trash_btn"):
+                        st.session_state._deleted_draft_trash = None
                         st.rerun()
 
         # Export dialog
