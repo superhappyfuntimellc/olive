@@ -531,6 +531,271 @@ def reset_workspace_story_bible(keep_templates: bool = True) -> None:
 
 
 # ============================================================
+# CLOUD SYNC SUPPORT (S3-Compatible)
+# ============================================================
+def get_s3_credentials() -> Optional[Dict[str, str]]:
+    """Get S3 credentials from secrets or environment."""
+    try:
+        # Try Streamlit secrets first
+        if hasattr(st, "secrets"):
+            aws_key = st.secrets.get("AWS_ACCESS_KEY_ID", "")
+            aws_secret = st.secrets.get("AWS_SECRET_ACCESS_KEY", "")
+            aws_bucket = st.secrets.get("AWS_S3_BUCKET", "")
+            aws_region = st.secrets.get("AWS_REGION", "us-east-1")
+            aws_endpoint = st.secrets.get("AWS_ENDPOINT_URL", "")  # For MinIO/custom
+        else:
+            aws_key = ""
+            aws_secret = ""
+            aws_bucket = ""
+            aws_region = ""
+            aws_endpoint = ""
+
+        # Fall back to environment variables
+        aws_key = aws_key or os.getenv("AWS_ACCESS_KEY_ID", "")
+        aws_secret = aws_secret or os.getenv("AWS_SECRET_ACCESS_KEY", "")
+        aws_bucket = aws_bucket or os.getenv("AWS_S3_BUCKET", "")
+        aws_region = aws_region or os.getenv("AWS_REGION", "us-east-1")
+        aws_endpoint = aws_endpoint or os.getenv("AWS_ENDPOINT_URL", "")
+
+        if not (aws_key and aws_secret and aws_bucket):
+            return None
+
+        return {
+            "aws_access_key_id": aws_key,
+            "aws_secret_access_key": aws_secret,
+            "bucket": aws_bucket,
+            "region": aws_region,
+            "endpoint_url": aws_endpoint if aws_endpoint else None,
+        }
+    except Exception:
+        return None
+
+
+def has_cloud_sync() -> bool:
+    """Check if cloud sync is configured."""
+    return get_s3_credentials() is not None
+
+
+def list_cloud_saves() -> List[Dict[str, Any]]:
+    """List available saves in cloud storage."""
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+
+        creds = get_s3_credentials()
+        if not creds:
+            return []
+
+        # Create S3 client
+        s3_config = {
+            "aws_access_key_id": creds["aws_access_key_id"],
+            "aws_secret_access_key": creds["aws_secret_access_key"],
+            "region_name": creds["region"],
+        }
+        if creds["endpoint_url"]:
+            s3_config["endpoint_url"] = creds["endpoint_url"]
+
+        s3 = boto3.client("s3", **s3_config)
+
+        # List objects with prefix
+        response = s3.list_objects_v2(Bucket=creds["bucket"], Prefix="olivetti/")
+
+        saves = []
+        for obj in response.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith(".json"):
+                save_name = key.replace("olivetti/", "").replace(".json", "")
+                saves.append(
+                    {
+                        "name": save_name,
+                        "key": key,
+                        "size": obj["Size"],
+                        "modified": obj["LastModified"].strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
+
+        # Sort by modified date (newest first)
+        saves.sort(key=lambda x: x["modified"], reverse=True)
+        return saves
+    except ImportError:
+        st.error("boto3 not installed. Run: pip install boto3")
+        return []
+    except Exception as e:
+        st.error(f"Failed to list cloud saves: {e}")
+        return []
+
+
+def upload_to_cloud(save_name: str) -> bool:
+    """Upload current state to cloud storage."""
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+
+        creds = get_s3_credentials()
+        if not creds:
+            st.error("Cloud sync not configured")
+            return False
+
+        # Create snapshot
+        snapshot = {
+            "saved_ts": now_ts(),
+            "save_name": save_name,
+            "session": {
+                k: (
+                    compact_voice_vault(v)
+                    if k == "voices"
+                    else (
+                        compact_style_banks(v)
+                        if k == "style_banks"
+                        else st.session_state.get(k)
+                    )
+                )
+                for k, v in st.session_state.items()
+                if k not in ("_rerun_count",)
+            },
+        }
+
+        # Serialize to JSON
+        json_data = json.dumps(snapshot, ensure_ascii=False, indent=2)
+
+        # Upload to S3
+        s3_config = {
+            "aws_access_key_id": creds["aws_access_key_id"],
+            "aws_secret_access_key": creds["aws_secret_access_key"],
+            "region_name": creds["region"],
+        }
+        if creds["endpoint_url"]:
+            s3_config["endpoint_url"] = creds["endpoint_url"]
+
+        s3 = boto3.client("s3", **s3_config)
+
+        key = f"olivetti/{save_name}.json"
+        s3.put_object(
+            Bucket=creds["bucket"],
+            Key=key,
+            Body=json_data.encode("utf-8"),
+            ContentType="application/json",
+        )
+
+        return True
+    except ImportError:
+        st.error("boto3 not installed. Run: pip install boto3")
+        return False
+    except Exception as e:
+        st.error(f"Failed to upload to cloud: {e}")
+        return False
+
+
+def download_from_cloud(save_key: str) -> bool:
+    """Download state from cloud storage."""
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+
+        creds = get_s3_credentials()
+        if not creds:
+            st.error("Cloud sync not configured")
+            return False
+
+        # Download from S3
+        s3_config = {
+            "aws_access_key_id": creds["aws_access_key_id"],
+            "aws_secret_access_key": creds["aws_secret_access_key"],
+            "region_name": creds["region"],
+        }
+        if creds["endpoint_url"]:
+            s3_config["endpoint_url"] = creds["endpoint_url"]
+
+        s3 = boto3.client("s3", **s3_config)
+
+        response = s3.get_object(
+            Bucket=creds["bucket"],
+            Key=save_key,
+        )
+
+        # Parse JSON
+        json_data = response["Body"].read().decode("utf-8")
+        snapshot = json.loads(json_data)
+
+        # Load session state
+        sess = snapshot.get("session", {}) or {}
+        for k in (
+            "voices",
+            "style_banks",
+            "sb_workspace",
+            "main_text",
+            "synopsis",
+            "genre_style_notes",
+            "world",
+            "characters",
+            "outline",
+            "ai_intensity",
+            "workspace_title",
+            "story_bible_lock",
+        ):
+            if k not in sess:
+                continue
+            if k == "voices":
+                st.session_state.voices = rebuild_vectors_in_voice_vault(
+                    sess.get("voices", default_voice_vault())
+                )
+            elif k == "style_banks":
+                st.session_state.style_banks = rebuild_vectors_in_style_banks(
+                    sess.get("style_banks", default_style_banks())
+                )
+            else:
+                st.session_state[k] = sess.get(k)
+
+        # Reset undo history after cloud load
+        st.session_state._undo_history = [st.session_state.get("main_text", "")]
+        st.session_state._redo_history = []
+        st.session_state["_dirty"] = False
+
+        return True
+    except ImportError:
+        st.error("boto3 not installed. Run: pip install boto3")
+        return False
+    except Exception as e:
+        st.error(f"Failed to download from cloud: {e}")
+        return False
+
+
+def delete_from_cloud(save_key: str) -> bool:
+    """Delete a save from cloud storage."""
+    try:
+        import boto3
+        from botocore.exceptions import ClientError
+
+        creds = get_s3_credentials()
+        if not creds:
+            st.error("Cloud sync not configured")
+            return False
+
+        s3_config = {
+            "aws_access_key_id": creds["aws_access_key_id"],
+            "aws_secret_access_key": creds["aws_secret_access_key"],
+            "region_name": creds["region"],
+        }
+        if creds["endpoint_url"]:
+            s3_config["endpoint_url"] = creds["endpoint_url"]
+
+        s3 = boto3.client("s3", **s3_config)
+
+        s3.delete_object(
+            Bucket=creds["bucket"],
+            Key=save_key,
+        )
+
+        return True
+    except ImportError:
+        st.error("boto3 not installed. Run: pip install boto3")
+        return False
+    except Exception as e:
+        st.error(f"Failed to delete from cloud: {e}")
+        return False
+
+
+# ============================================================
 # IMPORT / EXPORT SUPPORT
 # ============================================================
 def import_text_from_txt(uploaded_file) -> Optional[str]:
@@ -787,6 +1052,10 @@ def init_state() -> None:
         "_autosave_checked": False,
         "_show_recovery_dialog": False,
         "_confirm_import": False,
+        "_show_cloud_upload": False,
+        "_show_cloud_download": False,
+        "_cloud_save_name": "",
+        "_selected_cloud_save": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1181,7 +1450,130 @@ def main_ui() -> None:
             st.button("PDF", disabled=True, key="export_pdf_disabled2")
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**Voice controls")
+    st.sidebar.markdown("**Cloud Sync (S3)**")
+
+    # Check if cloud sync is configured
+    cloud_configured = has_cloud_sync()
+
+    if not cloud_configured:
+        st.sidebar.info(
+            "☁️ Cloud sync not configured\n\n"
+            "Set environment variables or Streamlit secrets:\n"
+            "• AWS_ACCESS_KEY_ID\n"
+            "• AWS_SECRET_ACCESS_KEY\n"
+            "• AWS_S3_BUCKET\n"
+            "• AWS_REGION (optional)\n"
+            "• AWS_ENDPOINT_URL (optional)"
+        )
+    else:
+        # Cloud sync controls
+        cloud_col1, cloud_col2 = st.sidebar.columns(2)
+
+        with cloud_col1:
+            if st.button("☁️ Upload", key="cloud_upload_btn"):
+                st.session_state._show_cloud_upload = True
+
+        with cloud_col2:
+            if st.button("📥 Download", key="cloud_download_btn"):
+                st.session_state._show_cloud_download = True
+
+        # Upload dialog
+        if st.session_state.get("_show_cloud_upload"):
+            with st.sidebar.expander("☁️ Upload to Cloud", expanded=True):
+                save_name = st.text_input(
+                    "Save name",
+                    value=st.session_state.get(
+                        "workspace_title",
+                        f"save_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    ),
+                    key="cloud_save_name_input",
+                )
+
+                # Sanitize save name
+                save_name_clean = (
+                    re.sub(r"[^\w\s-]", "", save_name).strip().replace(" ", "_")
+                )
+
+                if save_name_clean:
+                    st.caption(f"Will save as: {save_name_clean}.json")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button(
+                        "✓ Upload",
+                        key="confirm_cloud_upload",
+                        disabled=not save_name_clean,
+                    ):
+                        if upload_to_cloud(save_name_clean):
+                            st.success(f"✓ Uploaded to cloud: {save_name_clean}")
+                            st.session_state._show_cloud_upload = False
+                            time.sleep(1)
+                            st.rerun()
+                with col2:
+                    if st.button("✗ Cancel", key="cancel_cloud_upload"):
+                        st.session_state._show_cloud_upload = False
+                        st.rerun()
+
+        # Download dialog
+        if st.session_state.get("_show_cloud_download"):
+            with st.sidebar.expander("📥 Download from Cloud", expanded=True):
+                # List available saves
+                cloud_saves = list_cloud_saves()
+
+                if not cloud_saves:
+                    st.info("No cloud saves found")
+                else:
+                    st.markdown("**Available saves:**")
+
+                    # Display saves
+                    for save in cloud_saves:
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            if st.button(
+                                f"📄 {save['name']}",
+                                key=f"select_{save['key']}",
+                                help=f"Modified: {save['modified']}\nSize: {save['size']} bytes",
+                            ):
+                                st.session_state._selected_cloud_save = save
+                        with col2:
+                            if st.button(
+                                "🗑️", key=f"delete_{save['key']}", help="Delete"
+                            ):
+                                if delete_from_cloud(save["key"]):
+                                    st.success("Deleted")
+                                    time.sleep(0.5)
+                                    st.rerun()
+
+                # Confirmation for selected save
+                selected = st.session_state.get("_selected_cloud_save")
+                if selected:
+                    st.warning(
+                        f"⚠️ Download '{selected['name']}'?\nThis will replace your current work!"
+                    )
+                    st.caption(f"Modified: {selected['modified']}")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✓ Download", key="confirm_cloud_download"):
+                            if download_from_cloud(selected["key"]):
+                                st.success(f"✓ Downloaded: {selected['name']}")
+                                st.session_state._selected_cloud_save = None
+                                st.session_state._show_cloud_download = False
+                                time.sleep(1)
+                                st.rerun()
+                    with col2:
+                        if st.button("✗ Cancel", key="cancel_cloud_download_confirm"):
+                            st.session_state._selected_cloud_save = None
+                            st.rerun()
+
+                st.markdown("---")
+                if st.button("Close", key="close_cloud_download"):
+                    st.session_state._show_cloud_download = False
+                    st.session_state._selected_cloud_save = None
+                    st.rerun()
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Voice controls**")
     st.sidebar.checkbox(
         "Enable writing style",
         value=st.session_state.vb_style_on,

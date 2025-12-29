@@ -8,3 +8,7 @@ httpx>=0.25.0
 # pypdf>=3.0.0        # For PDF import
 # reportlab>=4.0.0    # For PDF export
 
+# Optional: Cloud Sync support
+# Uncomment if you want S3-compatible cloud storage:
+# boto3>=1.28.0       # For AWS S3, MinIO, DigitalOcean Spaces, etc.
+
