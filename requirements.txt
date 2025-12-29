@@ -2,3 +2,9 @@
 streamlit>=1.28.0
 httpx>=0.25.0
 
+# Optional: Import/Export support
+# Uncomment if you need these formats:
+# python-docx>=1.0.0  # For DOCX import/export
+# pypdf>=3.0.0        # For PDF import
+# reportlab>=4.0.0    # For PDF export
+

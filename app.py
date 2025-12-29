@@ -531,6 +531,167 @@ def reset_workspace_story_bible(keep_templates: bool = True) -> None:
 
 
 # ============================================================
+# IMPORT / EXPORT SUPPORT
+# ============================================================
+def import_text_from_txt(uploaded_file) -> Optional[str]:
+    """Import text from TXT file."""
+    try:
+        content = uploaded_file.read().decode("utf-8")
+        return _normalize_text(content)
+    except Exception as e:
+        st.error(f"Failed to import TXT: {e}")
+        return None
+
+
+def import_text_from_md(uploaded_file) -> Optional[str]:
+    """Import text from Markdown file."""
+    try:
+        content = uploaded_file.read().decode("utf-8")
+        return _normalize_text(content)
+    except Exception as e:
+        st.error(f"Failed to import MD: {e}")
+        return None
+
+
+def import_text_from_docx(uploaded_file) -> Optional[str]:
+    """Import text from DOCX file using python-docx."""
+    try:
+        # Import dynamically to avoid hard dependency
+        import docx
+
+        doc = docx.Document(uploaded_file)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        content = "\n\n".join(paragraphs)
+        return _normalize_text(content)
+    except ImportError:
+        st.error("python-docx not installed. Run: pip install python-docx")
+        return None
+    except Exception as e:
+        st.error(f"Failed to import DOCX: {e}")
+        return None
+
+
+def import_text_from_pdf(uploaded_file) -> Optional[str]:
+    """Import text from PDF file using pypdf."""
+    try:
+        # Import dynamically to avoid hard dependency
+        import pypdf
+
+        reader = pypdf.PdfReader(uploaded_file)
+        paragraphs = []
+        for page in reader.pages:
+            text = page.extract_text()
+            if text.strip():
+                paragraphs.append(text.strip())
+        content = "\n\n".join(paragraphs)
+        return _normalize_text(content)
+    except ImportError:
+        st.error("pypdf not installed. Run: pip install pypdf")
+        return None
+    except Exception as e:
+        st.error(f"Failed to import PDF: {e}")
+        return None
+
+
+def export_to_txt(text: str, filename: str) -> bytes:
+    """Export text to TXT format."""
+    return text.encode("utf-8")
+
+
+def export_to_md(text: str, filename: str) -> bytes:
+    """Export text to Markdown format."""
+    # Add a title if we have one
+    title = st.session_state.get("workspace_title", "")
+    if title:
+        md_content = f"# {title}\n\n{text}"
+    else:
+        md_content = text
+    return md_content.encode("utf-8")
+
+
+def export_to_docx(text: str, filename: str) -> Optional[bytes]:
+    """Export text to DOCX format using python-docx."""
+    try:
+        import docx
+        from io import BytesIO
+
+        doc = docx.Document()
+
+        # Add title if available
+        title = st.session_state.get("workspace_title", "")
+        if title:
+            doc.add_heading(title, level=0)
+
+        # Add paragraphs
+        paragraphs = _split_paragraphs(text)
+        for para in paragraphs:
+            doc.add_paragraph(para)
+
+        # Save to bytes
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        return buffer.read()
+    except ImportError:
+        st.error("python-docx not installed. Run: pip install python-docx")
+        return None
+    except Exception as e:
+        st.error(f"Failed to export DOCX: {e}")
+        return None
+
+
+def export_to_pdf(text: str, filename: str) -> Optional[bytes]:
+    """Export text to PDF format using reportlab."""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from io import BytesIO
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=letter,
+            leftMargin=0.75 * inch,
+            rightMargin=0.75 * inch,
+            topMargin=0.75 * inch,
+            bottomMargin=0.75 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Add title if available
+        title = st.session_state.get("workspace_title", "")
+        if title:
+            title_style = styles["Title"]
+            story.append(Paragraph(title, title_style))
+            story.append(Spacer(1, 0.2 * inch))
+
+        # Add paragraphs
+        paragraphs = _split_paragraphs(text)
+        body_style = styles["BodyText"]
+        for para in paragraphs:
+            # Escape XML special characters
+            para_escaped = (
+                para.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
+            story.append(Paragraph(para_escaped, body_style))
+            story.append(Spacer(1, 0.15 * inch))
+
+        doc.build(story)
+        buffer.seek(0)
+        return buffer.read()
+    except ImportError:
+        st.error("reportlab not installed. Run: pip install reportlab")
+        return None
+    except Exception as e:
+        st.error(f"Failed to export PDF: {e}")
+        return None
+
+
+# ============================================================
 # UNDO / REDO SUPPORT
 # ============================================================
 def push_undo_history(text: str) -> None:
@@ -625,6 +786,7 @@ def init_state() -> None:
         "_redo_history": [],
         "_autosave_checked": False,
         "_show_recovery_dialog": False,
+        "_confirm_import": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -889,7 +1051,137 @@ def main_ui() -> None:
                     st.rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**Voice controls**")
+    st.sidebar.markdown("**Import / Export**")
+
+    # Import section
+    st.sidebar.markdown("*Import text:*")
+    uploaded_file = st.sidebar.file_uploader(
+        "Choose file",
+        type=["txt", "md", "docx", "pdf"],
+        key="file_uploader",
+        label_visibility="collapsed",
+    )
+
+    if uploaded_file is not None:
+        file_ext = uploaded_file.name.split(".")[-1].lower()
+
+        # Show confirmation dialog if current work exists
+        current_text = st.session_state.get("main_text", "")
+        if current_text and current_text.strip():
+            if not st.session_state.get("_confirm_import"):
+                st.sidebar.warning("⚠️ This will replace your current text!")
+                col1, col2 = st.sidebar.columns(2)
+                with col1:
+                    if st.button("✓ Import", key="confirm_import_btn"):
+                        st.session_state._confirm_import = True
+                        st.rerun()
+                with col2:
+                    if st.button("✗ Cancel", key="cancel_import_btn"):
+                        st.session_state._confirm_import = False
+                        st.rerun()
+        else:
+            st.session_state._confirm_import = True
+
+        # Proceed with import if confirmed
+        if st.session_state.get("_confirm_import"):
+            imported_text = None
+
+            if file_ext == "txt":
+                imported_text = import_text_from_txt(uploaded_file)
+            elif file_ext == "md":
+                imported_text = import_text_from_md(uploaded_file)
+            elif file_ext == "docx":
+                imported_text = import_text_from_docx(uploaded_file)
+            elif file_ext == "pdf":
+                imported_text = import_text_from_pdf(uploaded_file)
+
+            if imported_text:
+                st.session_state.main_text = imported_text
+                # Reset undo history after import
+                st.session_state._undo_history = [imported_text]
+                st.session_state._redo_history = []
+                st.session_state._confirm_import = False
+                mark_dirty()
+                st.sidebar.success(f"✓ Imported {uploaded_file.name}")
+                st.rerun()
+
+    # Export section
+    st.sidebar.markdown("*Export text:*")
+    export_cols = st.sidebar.columns(4)
+
+    current_text = st.session_state.get("main_text", "")
+    export_disabled = not current_text or not current_text.strip()
+
+    # Generate base filename
+    title = st.session_state.get("workspace_title", "")
+    base_filename = title if title else "olivetti_export"
+    # Clean filename
+    base_filename = re.sub(r"[^\w\s-]", "", base_filename).strip().replace(" ", "_")
+
+    with export_cols[0]:
+        if current_text and not export_disabled:
+            txt_data = export_to_txt(current_text, base_filename)
+            st.download_button(
+                label="TXT",
+                data=txt_data,
+                file_name=f"{base_filename}.txt",
+                mime="text/plain",
+                disabled=export_disabled,
+                key="export_txt",
+            )
+        else:
+            st.button("TXT", disabled=True, key="export_txt_disabled")
+
+    with export_cols[1]:
+        if current_text and not export_disabled:
+            md_data = export_to_md(current_text, base_filename)
+            st.download_button(
+                label="MD",
+                data=md_data,
+                file_name=f"{base_filename}.md",
+                mime="text/markdown",
+                disabled=export_disabled,
+                key="export_md",
+            )
+        else:
+            st.button("MD", disabled=True, key="export_md_disabled")
+
+    with export_cols[2]:
+        if current_text and not export_disabled:
+            docx_data = export_to_docx(current_text, base_filename)
+            if docx_data:
+                st.download_button(
+                    label="DOCX",
+                    data=docx_data,
+                    file_name=f"{base_filename}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    disabled=export_disabled,
+                    key="export_docx",
+                )
+            else:
+                st.button("DOCX", disabled=True, key="export_docx_disabled")
+        else:
+            st.button("DOCX", disabled=True, key="export_docx_disabled2")
+
+    with export_cols[3]:
+        if current_text and not export_disabled:
+            pdf_data = export_to_pdf(current_text, base_filename)
+            if pdf_data:
+                st.download_button(
+                    label="PDF",
+                    data=pdf_data,
+                    file_name=f"{base_filename}.pdf",
+                    mime="application/pdf",
+                    disabled=export_disabled,
+                    key="export_pdf",
+                )
+            else:
+                st.button("PDF", disabled=True, key="export_pdf_disabled")
+        else:
+            st.button("PDF", disabled=True, key="export_pdf_disabled2")
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Voice controls")
     st.sidebar.checkbox(
         "Enable writing style",
         value=st.session_state.vb_style_on,
