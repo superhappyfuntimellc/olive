@@ -1035,6 +1035,13 @@ def get_export_filename() -> str:
         return f"olivetti_{bay.lower()}_{timestamp}"
 
 
+def count_words(text: str) -> int:
+    """Count words in text."""
+    if not text or not text.strip():
+        return 0
+    return len(text.split())
+
+
 # ============================================================
 # BAY TRANSFER & EXPORT
 # ============================================================
@@ -1868,6 +1875,38 @@ def main_ui() -> None:
             """,
             unsafe_allow_html=True,
         )
+
+        # Word count indicators
+        current_text = st.session_state.get("main_text", "")
+        current_word_count = count_words(current_text)
+
+        # Get word counts for all bays
+        bay_word_counts = {}
+        for bay in ["ROUGH", "EDIT", "FINAL"]:
+            workspace = st.session_state.active_project_by_bay.get(bay)
+            if workspace:
+                bay_text = workspace.get("main_text", "")
+                bay_word_counts[bay] = count_words(bay_text)
+            else:
+                bay_word_counts[bay] = 0
+
+        # Display word counts
+        wc_col1, wc_col2 = st.columns([1, 1])
+        with wc_col1:
+            st.markdown(
+                f"**Current Draft:** {current_word_count:,} words",
+                help="Live word count for the active draft",
+            )
+        with wc_col2:
+            bay_counts_text = " • ".join(
+                [f"{bay}: {count:,}" for bay, count in bay_word_counts.items()]
+            )
+            st.markdown(
+                f"**Bay Counts:** {bay_counts_text}",
+                help="Word counts for drafts in each bay",
+            )
+
+        st.markdown("---")
 
         # Top bar: Undo/Redo + Bay Transfer + Export
         top_col1, top_col2, top_col3, top_col4 = st.columns([1, 1, 2, 2])
