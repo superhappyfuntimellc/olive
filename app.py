@@ -305,6 +305,253 @@ def compact_style_banks(banks: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
+# ADAPTIVE STYLE LEARNING ENGINE
+# ============================================================
+def init_style_learning_engine() -> Dict[str, Any]:
+    """Initialize the adaptive style learning engine data structure."""
+    return {
+        "version": "1.0",
+        "created_ts": now_ts(),
+        "last_updated_ts": now_ts(),
+        "learning_enabled": True,
+        "edit_pairs": [],  # (before, after, timestamp, context)
+        "accepted_suggestions": [],  # (original, suggestion, timestamp)
+        "rejected_suggestions": [],  # (original, suggestion, timestamp)
+        "manual_rewrites": [],  # (before, after, timestamp)
+        "learned_patterns": {
+            "sentence_length": {"short": 0, "medium": 0, "long": 0},
+            "paragraph_structure": {"single": 0, "multi": 0},
+            "word_preferences": {},  # word -> frequency
+            "phrase_patterns": {},  # phrase -> frequency
+            "tone_indicators": {},  # tone marker -> frequency
+            "punctuation_style": {},  # pattern -> frequency
+        },
+        "style_stats": {
+            "avg_sentence_length": 0.0,
+            "avg_paragraph_length": 0.0,
+            "total_edits": 0,
+            "total_accepts": 0,
+            "total_rejects": 0,
+        },
+    }
+
+
+def learn_from_edit(before_text: str, after_text: str, context: str = "") -> None:
+    """Learn from a user edit (before -> after)."""
+    if not st.session_state.get("_style_learning_enabled", True):
+        return
+
+    if not before_text or not after_text:
+        return
+
+    engine = st.session_state.get("_style_learning_engine")
+    if not engine:
+        engine = init_style_learning_engine()
+        st.session_state._style_learning_engine = engine
+
+    # Add edit pair (keep last 100 edits)
+    edit_entry = {
+        "before": before_text[:500],
+        "after": after_text[:500],
+        "timestamp": now_ts(),
+        "context": context,
+    }
+    engine["edit_pairs"].insert(0, edit_entry)
+    engine["edit_pairs"] = engine["edit_pairs"][:100]
+
+    # Update statistics
+    engine["style_stats"]["total_edits"] += 1
+    engine["last_updated_ts"] = now_ts()
+
+    # Learn patterns from the edit
+    _extract_and_learn_patterns(after_text, engine)
+
+
+def learn_from_acceptance(original: str, suggestion: str) -> None:
+    """Learn from an accepted suggestion."""
+    if not st.session_state.get("_style_learning_enabled", True):
+        return
+
+    engine = st.session_state.get("_style_learning_engine")
+    if not engine:
+        engine = init_style_learning_engine()
+        st.session_state._style_learning_engine = engine
+
+    accept_entry = {
+        "original": original[:500],
+        "suggestion": suggestion[:500],
+        "timestamp": now_ts(),
+    }
+    engine["accepted_suggestions"].insert(0, accept_entry)
+    engine["accepted_suggestions"] = engine["accepted_suggestions"][:100]
+
+    engine["style_stats"]["total_accepts"] += 1
+    engine["last_updated_ts"] = now_ts()
+
+    _extract_and_learn_patterns(suggestion, engine)
+
+
+def learn_from_rejection(original: str, suggestion: str) -> None:
+    """Learn from a rejected suggestion."""
+    if not st.session_state.get("_style_learning_enabled", True):
+        return
+
+    engine = st.session_state.get("_style_learning_engine")
+    if not engine:
+        engine = init_style_learning_engine()
+        st.session_state._style_learning_engine = engine
+
+    reject_entry = {
+        "original": original[:500],
+        "suggestion": suggestion[:500],
+        "timestamp": now_ts(),
+    }
+    engine["rejected_suggestions"].insert(0, reject_entry)
+    engine["rejected_suggestions"] = engine["rejected_suggestions"][:100]
+
+    engine["style_stats"]["total_rejects"] += 1
+    engine["last_updated_ts"] = now_ts()
+
+
+def learn_from_manual_rewrite(before_text: str, after_text: str) -> None:
+    """Learn from a manual rewrite (significant user change)."""
+    if not st.session_state.get("_style_learning_enabled", True):
+        return
+
+    if not before_text or not after_text:
+        return
+
+    # Only count as manual rewrite if significant change (>30% different)
+    if len(before_text) > 0 and len(after_text) > 0:
+        diff_ratio = abs(len(after_text) - len(before_text)) / max(
+            len(before_text), len(after_text)
+        )
+        if diff_ratio < 0.3:
+            return
+
+    engine = st.session_state.get("_style_learning_engine")
+    if not engine:
+        engine = init_style_learning_engine()
+        st.session_state._style_learning_engine = engine
+
+    rewrite_entry = {
+        "before": before_text[:500],
+        "after": after_text[:500],
+        "timestamp": now_ts(),
+    }
+    engine["manual_rewrites"].insert(0, rewrite_entry)
+    engine["manual_rewrites"] = engine["manual_rewrites"][:100]
+
+    engine["last_updated_ts"] = now_ts()
+    _extract_and_learn_patterns(after_text, engine)
+
+
+def _extract_and_learn_patterns(text: str, engine: Dict[str, Any]) -> None:
+    """Extract and learn patterns from text."""
+    if not text:
+        return
+
+    patterns = engine["learned_patterns"]
+
+    # Learn sentence length preferences
+    sentences = [
+        s.strip()
+        for s in text.replace("!", ".").replace("?", ".").split(".")
+        if s.strip()
+    ]
+    for sent in sentences:
+        word_count = len(sent.split())
+        if word_count <= 10:
+            patterns["sentence_length"]["short"] += 1
+        elif word_count <= 20:
+            patterns["sentence_length"]["medium"] += 1
+        else:
+            patterns["sentence_length"]["long"] += 1
+
+    # Learn word preferences (common words)
+    words = text.lower().split()
+    for word in words:
+        word = word.strip(".,!?;:")
+        if len(word) > 3:  # Only learn significant words
+            patterns["word_preferences"][word] = (
+                patterns["word_preferences"].get(word, 0) + 1
+            )
+
+    # Learn punctuation style
+    for char in ["!", "?", ";", ":", "--", "..."]:
+        if char in text:
+            patterns["punctuation_style"][char] = (
+                patterns["punctuation_style"].get(char, 0) + 1
+            )
+
+    # Update averages
+    if sentences:
+        avg_sent_len = sum(len(s.split()) for s in sentences) / len(sentences)
+        current_avg = engine["style_stats"].get("avg_sentence_length", 0.0)
+        total_edits = engine["style_stats"].get("total_edits", 1)
+        # Incremental average
+        engine["style_stats"]["avg_sentence_length"] = (
+            current_avg * (total_edits - 1) + avg_sent_len
+        ) / total_edits
+
+
+def get_style_learning_stats() -> Dict[str, Any]:
+    """Get current style learning statistics."""
+    engine = st.session_state.get("_style_learning_engine")
+    if not engine:
+        return {
+            "enabled": True,
+            "total_edits": 0,
+            "total_accepts": 0,
+            "total_rejects": 0,
+            "avg_sentence_length": 0.0,
+        }
+
+    return {
+        "enabled": st.session_state.get("_style_learning_enabled", True),
+        "total_edits": engine["style_stats"].get("total_edits", 0),
+        "total_accepts": engine["style_stats"].get("total_accepts", 0),
+        "total_rejects": engine["style_stats"].get("total_rejects", 0),
+        "avg_sentence_length": engine["style_stats"].get("avg_sentence_length", 0.0),
+        "last_updated": engine.get("last_updated_ts", "never"),
+        "edit_pairs_count": len(engine.get("edit_pairs", [])),
+        "learned_words": len(
+            engine.get("learned_patterns", {}).get("word_preferences", {})
+        ),
+    }
+
+
+def reset_style_learning() -> None:
+    """Reset the style learning engine to defaults."""
+    st.session_state._style_learning_engine = init_style_learning_engine()
+
+
+def export_learned_style() -> Dict[str, Any]:
+    """Export the learned style for backup."""
+    engine = st.session_state.get("_style_learning_engine")
+    if not engine:
+        return init_style_learning_engine()
+    return engine.copy()
+
+
+def import_learned_style(style_data: Dict[str, Any]) -> bool:
+    """Import a learned style from backup."""
+    if not isinstance(style_data, dict):
+        return False
+
+    if "version" not in style_data:
+        return False
+
+    st.session_state._style_learning_engine = style_data
+    return True
+
+
+def toggle_style_learning(enabled: bool) -> None:
+    """Enable or disable style learning."""
+    st.session_state._style_learning_enabled = enabled
+
+
+# ============================================================
 # LANE DETECTION
 # ============================================================
 THOUGHT_WORDS = {
@@ -1351,8 +1598,18 @@ def can_redo() -> bool:
 
 
 def on_main_text_change() -> None:
-    """Callback for main text changes to track history."""
-    push_undo_history(st.session_state.main_text)
+    """Callback for main text changes to track history and learn from edits."""
+    current_text = st.session_state.main_text
+
+    # Get previous text from history for learning
+    undo_history = st.session_state.get("_undo_history", [])
+    if undo_history:
+        previous_text = undo_history[-1] if undo_history else ""
+        # Learn from the edit if it's significant
+        if previous_text and current_text and previous_text != current_text:
+            learn_from_edit(previous_text, current_text, context="main_text")
+
+    push_undo_history(current_text)
     mark_dirty()
 
 
@@ -1406,6 +1663,10 @@ def init_state() -> None:
         "_confirm_permanent_delete": None,
         "_voice_settings_by_bay": {},
         "_previous_bay": "NEW",
+        "_style_learning_engine": init_style_learning_engine(),
+        "_style_learning_enabled": True,
+        "_show_style_patterns": False,
+        "_confirm_reset_learning": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2435,6 +2696,107 @@ def main_ui() -> None:
         st.caption(
             f"Detected lane: {current_lane_from_draft(st.session_state.main_text)}"
         )
+
+        # Adaptive Style Learning Panel
+        st.markdown("---")
+        st.subheader("Style Learning")
+
+        learning_stats = get_style_learning_stats()
+
+        # Learning toggle
+        learning_enabled = st.checkbox(
+            "Enable adaptive learning",
+            value=learning_stats["enabled"],
+            key="style_learning_toggle",
+            help="Learn from your edits, rewrites, and preferences over time",
+        )
+        if learning_enabled != learning_stats["enabled"]:
+            toggle_style_learning(learning_enabled)
+
+        if learning_enabled:
+            # Show learning statistics
+            st.caption(f"**Learning Stats:**")
+            st.caption(f"• Total edits learned: {learning_stats['total_edits']}")
+            st.caption(f"• Accepted suggestions: {learning_stats['total_accepts']}")
+            st.caption(f"• Rejected suggestions: {learning_stats['total_rejects']}")
+            st.caption(f"• Learned words: {learning_stats['learned_words']}")
+
+            if learning_stats["avg_sentence_length"] > 0:
+                st.caption(
+                    f"• Avg sentence length: {learning_stats['avg_sentence_length']:.1f} words"
+                )
+
+            # Learning controls
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(
+                    "📊 View Patterns",
+                    help="View learned style patterns",
+                    key="view_patterns_btn",
+                ):
+                    st.session_state._show_style_patterns = not st.session_state.get(
+                        "_show_style_patterns", False
+                    )
+            with col2:
+                if st.button(
+                    "🔄 Reset", help="Reset learned styles", key="reset_learning_btn"
+                ):
+                    st.session_state._confirm_reset_learning = True
+
+            # Show patterns if toggled
+            if st.session_state.get("_show_style_patterns"):
+                with st.expander("📊 Learned Patterns", expanded=True):
+                    engine = st.session_state.get("_style_learning_engine")
+                    if engine:
+                        patterns = engine.get("learned_patterns", {})
+
+                        # Sentence length preference
+                        sent_prefs = patterns.get("sentence_length", {})
+                        if any(sent_prefs.values()):
+                            st.caption("**Sentence Length:**")
+                            total = sum(sent_prefs.values())
+                            if total > 0:
+                                st.caption(
+                                    f"Short: {sent_prefs.get('short', 0)/total*100:.0f}% • "
+                                    f"Medium: {sent_prefs.get('medium', 0)/total*100:.0f}% • "
+                                    f"Long: {sent_prefs.get('long', 0)/total*100:.0f}%"
+                                )
+
+                        # Top words
+                        word_prefs = patterns.get("word_preferences", {})
+                        if word_prefs:
+                            top_words = sorted(
+                                word_prefs.items(), key=lambda x: x[1], reverse=True
+                            )[:10]
+                            st.caption("**Top Words:**")
+                            st.caption(", ".join([f"{w} ({c})" for w, c in top_words]))
+
+                    if st.button("Close Patterns", key="close_patterns_btn"):
+                        st.session_state._show_style_patterns = False
+                        st.rerun()
+
+            # Reset confirmation
+            if st.session_state.get("_confirm_reset_learning"):
+                with st.expander("⚠️ Reset Style Learning?", expanded=True):
+                    st.warning(
+                        "This will erase all learned patterns and start fresh. This action cannot be undone."
+                    )
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button(
+                            "✓ Reset", key="confirm_reset_learning_btn", type="primary"
+                        ):
+                            reset_style_learning()
+                            st.session_state._confirm_reset_learning = False
+                            st.success("Style learning reset")
+                            st.rerun()
+                    with col2:
+                        if st.button("✗ Cancel", key="cancel_reset_learning_btn"):
+                            st.session_state._confirm_reset_learning = False
+                            st.rerun()
+        else:
+            st.caption("Learning is disabled. Enable to start adapting to your style.")
+
         st.markdown("---")
         st.write(
             f"Autosave: {st.session_state.get('autosave_time', 'never')} • "
