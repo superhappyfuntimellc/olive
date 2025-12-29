@@ -623,6 +623,8 @@ def init_state() -> None:
         "story_bible_lock": True,
         "_undo_history": [""],
         "_redo_history": [],
+        "_autosave_checked": False,
+        "_show_recovery_dialog": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -671,6 +673,26 @@ def maybe_autosave_throttled() -> None:
     autosave_state()
 
 
+def get_autosave_info() -> Optional[Dict[str, Any]]:
+    """Get autosave details without loading it."""
+    if not os.path.exists(AUTOSAVE_PATH):
+        return None
+    try:
+        with open(AUTOSAVE_PATH, "r", encoding="utf-8") as f:
+            snap = json.load(f)
+        sess = snap.get("session", {}) or {}
+        main_text = sess.get("main_text", "")
+        word_count = len(WORD_RE.findall(main_text)) if main_text else 0
+        return {
+            "saved_ts": snap.get("saved_ts", "Unknown"),
+            "word_count": word_count,
+            "preview": main_text[:100] + "..." if len(main_text) > 100 else main_text,
+            "has_content": bool(main_text and main_text.strip()),
+        }
+    except Exception:
+        return None
+
+
 def load_autosave() -> bool:
     if not os.path.exists(AUTOSAVE_PATH):
         return False
@@ -707,6 +729,9 @@ def load_autosave() -> bool:
         st.session_state.autosave_time = snap.get("saved_ts", now_ts())
         st.session_state["_autosave_unix"] = now_unix()
         st.session_state["_dirty"] = False
+        # Reset undo history after load
+        st.session_state._undo_history = [st.session_state.get("main_text", "")]
+        st.session_state._redo_history = []
         return True
     except Exception:
         return False
@@ -819,15 +844,49 @@ def main_ui() -> None:
         on_change=mark_dirty,
     )
 
+    # Autosave controls with recovery dialog
+    autosave_info = get_autosave_info()
+
     c1, c2 = st.sidebar.columns(2)
     with c1:
-        if st.button("Load autosave"):
-            ok = load_autosave()
-            st.sidebar.success("Loaded" if ok else "No autosave found")
+        if st.button("Recover autosave", disabled=autosave_info is None):
+            st.session_state._show_recovery_dialog = True
     with c2:
         if st.button("Save now"):
             autosave_state()
             st.sidebar.success("Saved")
+
+    # Show autosave status
+    if autosave_info:
+        st.sidebar.caption(
+            f"💾 Last autosave: {autosave_info['saved_ts']} "
+            f"({autosave_info['word_count']} words)"
+        )
+    else:
+        st.sidebar.caption("💾 No autosave available")
+
+    # Recovery dialog
+    if st.session_state.get("_show_recovery_dialog") and autosave_info:
+        with st.sidebar.expander("⚠️ Autosave Recovery", expanded=True):
+            st.warning("Loading autosave will replace your current work!")
+            st.markdown("**Autosave details:**")
+            st.text(f"Saved: {autosave_info['saved_ts']}")
+            st.text(f"Words: {autosave_info['word_count']}")
+            if autosave_info["preview"]:
+                st.text("Preview:")
+                st.code(autosave_info["preview"], language=None)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✓ Load it", key="confirm_recovery"):
+                    ok = load_autosave()
+                    st.session_state._show_recovery_dialog = False
+                    if ok:
+                        st.rerun()
+            with col2:
+                if st.button("✗ Cancel", key="cancel_recovery"):
+                    st.session_state._show_recovery_dialog = False
+                    st.rerun()
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Voice controls**")
@@ -1026,9 +1085,23 @@ def main_ui() -> None:
 # ============================================================
 def main() -> None:
     init_state()
-    # Load autosave once on first run
-    if st.session_state.get("autosave_time") is None:
-        load_autosave()
+
+    # Automatic recovery prompt on first run
+    if not st.session_state.get("_autosave_checked"):
+        st.session_state._autosave_checked = True
+        autosave_info = get_autosave_info()
+        # Only prompt if autosave exists and has content
+        if autosave_info and autosave_info.get("has_content"):
+            # Check if current session is empty (fresh start)
+            current_text = st.session_state.get("main_text", "")
+            if not current_text or not current_text.strip():
+                # Auto-load on fresh start
+                if load_autosave():
+                    st.toast("✓ Recovered autosave from " + autosave_info["saved_ts"])
+            else:
+                # Show dialog if there's existing work
+                st.session_state._show_recovery_dialog = True
+
     # Keep workspace mirror consistent
     save_workspace_from_session()
     # Throttled background autosave for edits
