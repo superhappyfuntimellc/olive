@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Todo App</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="app">
+    <h1>todos</h1>
+    <input 
+      type="text" 
+      id="new-todo" 
+      placeholder="What needs to be done?" 
+      aria-label="New todo"
+    >
+    <ul id="todo-list" role="list"></ul>
+    <div class="footer">
+      <span id="count" aria-live="polite">0 items left</span>
+      <div class="filters" role="group" aria-label="Filter todos">
+        <button data-filter="all" class="active" aria-pressed="true">All</button>
+        <button data-filter="active" aria-pressed="false">Active</button>
+        <button data-filter="completed" aria-pressed="false">Completed</button>
+      </div>
+      <button id="clear-completed" aria-label="Clear completed todos">Clear completed</button>
+    </div>
+  </div>
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
