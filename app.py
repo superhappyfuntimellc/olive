@@ -1841,6 +1841,34 @@ def main_ui() -> None:
     with center:
         st.subheader("Writing desk")
 
+        # Bay indicator with visual styling
+        current_bay = st.session_state.get("active_bay", "NEW")
+        bay_colors = {
+            "NEW": "#4A90E2",  # Blue
+            "ROUGH": "#F5A623",  # Orange
+            "EDIT": "#7ED321",  # Green
+            "FINAL": "#BD10E0",  # Purple
+        }
+        bay_color = bay_colors.get(current_bay, "#888888")
+        st.markdown(
+            f"""
+            <div style="
+                background-color: {bay_color};
+                color: white;
+                padding: 8px 16px;
+                border-radius: 8px;
+                text-align: center;
+                font-weight: bold;
+                font-size: 14px;
+                margin-bottom: 12px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            ">
+                📍 Current Bay: {current_bay}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         # Top bar: Undo/Redo + Bay Transfer + Export
         top_col1, top_col2, top_col3, top_col4 = st.columns([1, 1, 2, 2])
 
