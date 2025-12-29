@@ -218,6 +218,137 @@ def voice_names_for_selector() -> List[str]:
     return ["— None —"] + sorted(set(names), key=lambda x: x.lower())
 
 
+def create_my_voice_profile(voice_name: str, initial_samples: str = "") -> bool:
+    """Create a new My Voice profile with optional initial training samples."""
+    voice_name = (voice_name or "").strip()
+    if not voice_name or voice_name == "— None —":
+        return False
+
+    if voice_name in st.session_state.voices:
+        return False  # Already exists
+
+    # Create voice profile with empty lanes
+    st.session_state.voices[voice_name] = {
+        "created_ts": now_ts(),
+        "lanes": {ln: [] for ln in LANES},
+        "my_voice": True,  # Mark as My Voice profile
+        "learning_data": init_style_learning_engine(),  # Each voice has its own learning
+    }
+
+    # Add initial samples if provided
+    if initial_samples:
+        # Detect lane and add sample
+        detected_lane = current_lane_from_draft(initial_samples)
+        add_voice_sample(voice_name, detected_lane, initial_samples)
+
+    mark_dirty()
+    return True
+
+
+def delete_my_voice_profile(voice_name: str) -> bool:
+    """Delete a My Voice profile."""
+    voice_name = (voice_name or "").strip()
+    if not voice_name or voice_name == "— None —":
+        return False
+
+    if voice_name not in st.session_state.voices:
+        return False
+
+    # Don't delete default voices
+    voice_data = st.session_state.voices.get(voice_name, {})
+    if not voice_data.get("my_voice"):
+        return False
+
+    del st.session_state.voices[voice_name]
+    mark_dirty()
+    return True
+
+
+def get_my_voice_profiles() -> List[str]:
+    """Get list of My Voice profile names."""
+    voices = st.session_state.get("voices", {})
+    return [
+        name
+        for name, data in voices.items()
+        if isinstance(data, dict) and data.get("my_voice")
+    ]
+
+
+def get_voice_sample_count(voice_name: str) -> int:
+    """Get total number of samples for a voice."""
+    voices = st.session_state.get("voices", {})
+    if voice_name not in voices:
+        return 0
+
+    voice_data = voices[voice_name]
+    lanes = voice_data.get("lanes", {})
+    total = sum(len(samples) for samples in lanes.values())
+    return total
+
+
+def learn_voice_from_edit(voice_name: str, before_text: str, after_text: str) -> None:
+    """Learn voice-specific patterns from an edit."""
+    if not voice_name or voice_name == "— None —":
+        return
+
+    voices = st.session_state.get("voices", {})
+    if voice_name not in voices:
+        return
+
+    voice_data = voices[voice_name]
+    if not voice_data.get("my_voice"):
+        return
+
+    # Get or create learning data for this voice
+    if "learning_data" not in voice_data:
+        voice_data["learning_data"] = init_style_learning_engine()
+
+    learning_engine = voice_data["learning_data"]
+
+    # Add edit pair
+    edit_entry = {
+        "before": before_text[:500],
+        "after": after_text[:500],
+        "timestamp": now_ts(),
+        "context": "voice_edit",
+    }
+    learning_engine["edit_pairs"].insert(0, edit_entry)
+    learning_engine["edit_pairs"] = learning_engine["edit_pairs"][:100]
+
+    # Update statistics
+    learning_engine["style_stats"]["total_edits"] = (
+        learning_engine["style_stats"].get("total_edits", 0) + 1
+    )
+    learning_engine["last_updated_ts"] = now_ts()
+
+    # Learn patterns
+    _extract_and_learn_patterns(after_text, learning_engine)
+
+
+def get_voice_learning_stats(voice_name: str) -> Dict[str, Any]:
+    """Get learning statistics for a specific voice."""
+    voices = st.session_state.get("voices", {})
+    if voice_name not in voices:
+        return {"enabled": False, "total_edits": 0}
+
+    voice_data = voices[voice_name]
+    learning_engine = voice_data.get("learning_data")
+
+    if not learning_engine:
+        return {"enabled": False, "total_edits": 0}
+
+    return {
+        "enabled": True,
+        "total_edits": learning_engine["style_stats"].get("total_edits", 0),
+        "total_accepts": learning_engine["style_stats"].get("total_accepts", 0),
+        "total_rejects": learning_engine["style_stats"].get("total_rejects", 0),
+        "avg_sentence_length": learning_engine["style_stats"].get(
+            "avg_sentence_length", 0.0
+        ),
+        "last_updated": learning_engine.get("last_updated_ts", "never"),
+    }
+
+
 def add_voice_sample(voice_name: str, lane: str, text: str) -> bool:
     voice_name = (voice_name or "").strip()
     lane = lane if lane in LANES else "Narration"
@@ -1607,7 +1738,13 @@ def on_main_text_change() -> None:
         previous_text = undo_history[-1] if undo_history else ""
         # Learn from the edit if it's significant
         if previous_text and current_text and previous_text != current_text:
+            # Learn globally
             learn_from_edit(previous_text, current_text, context="main_text")
+
+            # Learn for the selected My Voice profile
+            trained_voice = st.session_state.get("trained_voice", "— None —")
+            if trained_voice and trained_voice != "— None —":
+                learn_voice_from_edit(trained_voice, previous_text, current_text)
 
     push_undo_history(current_text)
     mark_dirty()
@@ -1667,6 +1804,7 @@ def init_state() -> None:
         "_style_learning_enabled": True,
         "_show_style_patterns": False,
         "_confirm_reset_learning": False,
+        "_confirm_delete_voice": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2692,6 +2830,72 @@ def main_ui() -> None:
                 st.success("Sample added")
             else:
                 st.warning("Pick a voice (not None) and add non-empty text.")
+
+        # My Voice Profile Management
+        st.markdown("---")
+        st.caption("**My Voice Profiles**")
+        my_voices = get_my_voice_profiles()
+
+        if my_voices:
+            st.caption(f"{len(my_voices)} voice profile(s)")
+
+            # Show selected voice stats
+            current_voice = st.session_state.get("trained_voice", "— None —")
+            if current_voice in my_voices:
+                sample_count = get_voice_sample_count(current_voice)
+                voice_stats = get_voice_learning_stats(current_voice)
+                st.caption(f"• {sample_count} training sample(s)")
+                st.caption(f"• {voice_stats.get('total_edits', 0)} edit(s) learned")
+
+        # Create new My Voice profile
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            new_voice_name = st.text_input(
+                "New voice name",
+                key="new_voice_name_input",
+                placeholder="My Writing Style",
+                label_visibility="collapsed",
+            )
+        with col2:
+            if st.button("➕ Create", help="Create new My Voice profile"):
+                if new_voice_name and new_voice_name.strip():
+                    if create_my_voice_profile(new_voice_name.strip()):
+                        st.success(f"Created: {new_voice_name}")
+                        st.session_state.new_voice_name_input = ""
+                        st.rerun()
+                    else:
+                        st.error("Voice already exists")
+
+        # Delete current voice if it's a My Voice profile
+        current_voice = st.session_state.get("trained_voice", "— None —")
+        if current_voice in my_voices:
+            if st.button("🗑️ Delete Voice", help=f"Delete {current_voice} profile"):
+                st.session_state._confirm_delete_voice = current_voice
+
+        # Delete voice confirmation
+        if st.session_state.get("_confirm_delete_voice"):
+            voice_to_delete = st.session_state._confirm_delete_voice
+            with st.expander(f"⚠️ Delete '{voice_to_delete}'?", expanded=True):
+                sample_count = get_voice_sample_count(voice_to_delete)
+                st.warning(
+                    f"This will delete the voice profile and all {sample_count} training samples."
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button(
+                        "✓ Delete", key="confirm_delete_voice_btn", type="primary"
+                    ):
+                        if delete_my_voice_profile(voice_to_delete):
+                            st.session_state._confirm_delete_voice = None
+                            if st.session_state.get("trained_voice") == voice_to_delete:
+                                st.session_state.trained_voice = "— None —"
+                            st.success(f"Deleted: {voice_to_delete}")
+                            st.rerun()
+                with col2:
+                    if st.button("✗ Cancel", key="cancel_delete_voice_btn"):
+                        st.session_state._confirm_delete_voice = None
+                        st.rerun()
+
         st.markdown("---")
         st.caption(
             f"Detected lane: {current_lane_from_draft(st.session_state.main_text)}"
