@@ -1998,8 +1998,8 @@ def main_ui() -> None:
             else:
                 bay_word_counts[bay] = 0
 
-        # Display word counts
-        wc_col1, wc_col2 = st.columns([1, 1])
+        # Display word counts and trash bin indicator
+        wc_col1, wc_col2, wc_col3 = st.columns([1, 1, 0.5])
         with wc_col1:
             st.markdown(
                 f"**Current Draft:** {current_word_count:,} words",
@@ -2013,6 +2013,31 @@ def main_ui() -> None:
                 f"**Bay Counts:** {bay_counts_text}",
                 help="Word counts for drafts in each bay",
             )
+        with wc_col3:
+            # Trash bin indicator
+            trash_items = get_trash_bin_items()
+            trash_count = len(trash_items)
+            if trash_count > 0:
+                trash_color = "#E74C3C"  # Red for items in trash
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: {trash_color};
+                        color: white;
+                        padding: 6px 12px;
+                        border-radius: 6px;
+                        text-align: center;
+                        font-weight: bold;
+                        font-size: 13px;
+                        cursor: pointer;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    ">
+                        🗑️ {trash_count}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                    help=f"{trash_count} item(s) in Trash Bin",
+                )
 
         st.markdown("---")
 
