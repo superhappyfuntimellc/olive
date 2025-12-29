@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-Olivetti is a **single-file Streamlit app** ([app.py](../app.py), ~2960 lines) for AI-assisted fiction writing. All code lives in one file by design for "paste+click" deployment.
+Olivetti is a **single-file Streamlit app** (app.py, ~2960 lines) for AI-assisted fiction writing. All code lives in one file by design for "paste+click" deployment.
 
 ### Core Components (in order)
 | Section | Lines | Key Functions |
@@ -92,7 +92,8 @@ Add to `defaults` dict in `init_state()` (~line 860). Include in `new_project_pa
 - Model: set `OPENAI_MODEL` in secrets or env
 
 ## Files
-- [app.py](../app.py) - Entire application (single file by design)
-- [autosave/olivetti_state.json](../autosave/olivetti_state.json) - Persisted state
-- `.streamlit/secrets.toml` - API keys (gitignored)
-- [OLIVETTI_FEATURES_MANUAL.md](../OLIVETTI_FEATURES_MANUAL.md) - User documentation
+(Plain text file references used for GitHub Copilot compatibility)
+- app.py - Entire application (single file by design)
+- autosave/olivetti_state.json - Persisted state
+- .streamlit/secrets.toml - API keys (gitignored)
+- OLIVETTI_FEATURES_MANUAL.md - User documentation
