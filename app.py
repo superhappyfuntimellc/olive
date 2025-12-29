@@ -1042,6 +1042,75 @@ def count_words(text: str) -> int:
     return len(text.split())
 
 
+def get_voice_settings() -> dict:
+    """Get current voice settings from session state."""
+    return {
+        "vb_style_on": st.session_state.get("vb_style_on", True),
+        "writing_style": st.session_state.get("writing_style", "Neutral"),
+        "ai_intensity": st.session_state.get("ai_intensity", 0.75),
+        "trained_voice": st.session_state.get("trained_voice", "None"),
+        "voice_lane": st.session_state.get("voice_lane", "Narration"),
+        "voice_sample": st.session_state.get("voice_sample", ""),
+    }
+
+
+def set_voice_settings(settings: dict) -> None:
+    """Set voice settings in session state."""
+    st.session_state.vb_style_on = settings.get("vb_style_on", True)
+    st.session_state.writing_style = settings.get("writing_style", "Neutral")
+    st.session_state.ai_intensity = settings.get("ai_intensity", 0.75)
+    st.session_state.trained_voice = settings.get("trained_voice", "None")
+    st.session_state.voice_lane = settings.get("voice_lane", "Narration")
+    st.session_state.voice_sample = settings.get("voice_sample", "")
+
+
+def save_voice_settings_for_bay(bay: str) -> None:
+    """Save current voice settings for a specific bay."""
+    if "_voice_settings_by_bay" not in st.session_state:
+        st.session_state._voice_settings_by_bay = {}
+
+    st.session_state._voice_settings_by_bay[bay] = get_voice_settings()
+
+
+def load_voice_settings_for_bay(bay: str) -> None:
+    """Load voice settings for a specific bay."""
+    voice_settings_by_bay = st.session_state.get("_voice_settings_by_bay", {})
+
+    if bay in voice_settings_by_bay:
+        # Load saved settings for this bay
+        set_voice_settings(voice_settings_by_bay[bay])
+    else:
+        # Use default settings for this bay
+        default_settings = {
+            "vb_style_on": True,
+            "writing_style": "Neutral",
+            "ai_intensity": 0.75,
+            "trained_voice": "None",
+            "voice_lane": "Narration",
+            "voice_sample": "",
+        }
+        set_voice_settings(default_settings)
+
+
+def on_bay_change() -> None:
+    """Callback when active bay changes - save old bay settings and load new bay settings."""
+    # Get the previous bay from a temporary storage
+    previous_bay = st.session_state.get("_previous_bay")
+    current_bay = st.session_state.get("active_bay", "NEW")
+
+    # Save voice settings for the previous bay
+    if previous_bay and previous_bay != current_bay:
+        save_voice_settings_for_bay(previous_bay)
+
+    # Load voice settings for the new bay
+    load_voice_settings_for_bay(current_bay)
+
+    # Update the previous bay tracker
+    st.session_state._previous_bay = current_bay
+
+    mark_dirty()
+
+
 def delete_current_draft() -> bool:
     """Delete the current draft from the active bay (moves to trash bin)."""
     current_bay = st.session_state.get("active_bay", "NEW")
@@ -1335,6 +1404,8 @@ def init_state() -> None:
         "_trash_bin": [],
         "_show_trash_bin": False,
         "_confirm_permanent_delete": None,
+        "_voice_settings_by_bay": {},
+        "_previous_bay": "NEW",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1551,7 +1622,7 @@ def main_ui() -> None:
         BAYS,
         index=BAYS.index(st.session_state.active_bay),
         key="active_bay",
-        on_change=mark_dirty,
+        on_change=on_bay_change,
     )
 
     # Autosave controls with recovery dialog
