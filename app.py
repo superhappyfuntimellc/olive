@@ -1043,7 +1043,7 @@ def count_words(text: str) -> int:
 
 
 def delete_current_draft() -> bool:
-    """Delete the current draft from the active bay (moves to trash)."""
+    """Delete the current draft from the active bay (moves to trash bin)."""
     current_bay = st.session_state.get("active_bay", "NEW")
 
     # Check if there's content to delete
@@ -1055,11 +1055,23 @@ def delete_current_draft() -> bool:
     save_workspace_from_session()
     deleted_workspace = st.session_state.sb_workspace.copy()
 
-    st.session_state._deleted_draft_trash = {
+    # Initialize trash bin if needed
+    if "_trash_bin" not in st.session_state or st.session_state._trash_bin is None:
+        st.session_state._trash_bin = []
+
+    # Add to trash bin (newest first)
+    trash_item = {
         "bay": current_bay,
         "workspace": deleted_workspace,
         "timestamp": datetime.now().isoformat(),
+        "id": f"{current_bay}_{datetime.now().timestamp()}",
     }
+    st.session_state._trash_bin.insert(0, trash_item)
+
+    # Keep only the 10 most recent items
+    MAX_TRASH_ITEMS = 10
+    if len(st.session_state._trash_bin) > MAX_TRASH_ITEMS:
+        st.session_state._trash_bin = st.session_state._trash_bin[:MAX_TRASH_ITEMS]
 
     # Clear the current session state
     st.session_state.main_text = ""
@@ -1075,20 +1087,30 @@ def delete_current_draft() -> bool:
     return True
 
 
-def can_undo_delete() -> bool:
-    """Check if there's a deleted draft that can be restored."""
-    trash = st.session_state.get("_deleted_draft_trash")
-    return trash is not None and "workspace" in trash
+def get_trash_bin_items() -> list:
+    """Get all items in the trash bin."""
+    trash_bin = st.session_state.get("_trash_bin", [])
+    return trash_bin if trash_bin else []
 
 
-def undo_delete() -> bool:
-    """Restore the last deleted draft from trash."""
-    if not can_undo_delete():
+def restore_from_trash(trash_id: str) -> bool:
+    """Restore a specific item from the trash bin."""
+    trash_bin = get_trash_bin_items()
+
+    # Find the item
+    item_to_restore = None
+    item_index = None
+    for i, item in enumerate(trash_bin):
+        if item.get("id") == trash_id:
+            item_to_restore = item
+            item_index = i
+            break
+
+    if not item_to_restore:
         return False
 
-    trash = st.session_state._deleted_draft_trash
-    deleted_bay = trash["bay"]
-    deleted_workspace = trash["workspace"]
+    deleted_bay = item_to_restore["bay"]
+    deleted_workspace = item_to_restore["workspace"]
 
     # Restore the workspace to its original bay
     st.session_state.active_project_by_bay[deleted_bay] = deleted_workspace
@@ -1099,11 +1121,29 @@ def undo_delete() -> bool:
     # Load the restored workspace into session
     load_workspace_into_session()
 
-    # Clear the trash
-    st.session_state._deleted_draft_trash = None
+    # Remove from trash bin
+    st.session_state._trash_bin.pop(item_index)
 
     mark_dirty()
     return True
+
+
+def permanently_delete_from_trash(trash_id: str) -> bool:
+    """Permanently delete a specific item from the trash bin."""
+    trash_bin = get_trash_bin_items()
+
+    # Find and remove the item
+    for i, item in enumerate(trash_bin):
+        if item.get("id") == trash_id:
+            st.session_state._trash_bin.pop(i)
+            return True
+
+    return False
+
+
+def clear_trash_bin() -> None:
+    """Clear all items from the trash bin."""
+    st.session_state._trash_bin = []
 
 
 # ============================================================
@@ -1289,7 +1329,9 @@ def init_state() -> None:
         "_transfer_target_bay": None,
         "_show_export_dialog": False,
         "_confirm_delete": False,
-        "_deleted_draft_trash": None,
+        "_trash_bin": [],
+        "_show_trash_bin": False,
+        "_confirm_permanent_delete": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2048,15 +2090,17 @@ def main_ui() -> None:
             current_bay = st.session_state.get("active_bay", "NEW")
             word_count = count_words(st.session_state.get("main_text", ""))
             with st.expander(f"⚠️ Delete Draft from {current_bay} Bay?", expanded=True):
-                st.error(
-                    f"This will permanently delete the current draft ({word_count:,} words) from the {current_bay} bay. This action cannot be undone."
+                st.info(
+                    f"Draft will be moved to Trash Bin ({word_count:,} words). You can restore it later."
                 )
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("✓ Delete", key="confirm_delete_btn", type="primary"):
+                    if st.button(
+                        "✓ Move to Trash", key="confirm_delete_btn", type="primary"
+                    ):
                         if delete_current_draft():
                             st.session_state._confirm_delete = False
-                            st.success(f"✓ Draft deleted from {current_bay} bay")
+                            st.success(f"✓ Draft moved to Trash Bin")
                             st.rerun()
                         else:
                             st.session_state._confirm_delete = False
@@ -2066,28 +2110,103 @@ def main_ui() -> None:
                         st.session_state._confirm_delete = False
                         st.rerun()
 
-        # Undo delete notification
-        if can_undo_delete():
-            trash = st.session_state._deleted_draft_trash
-            deleted_bay = trash.get("bay", "unknown")
-            deleted_workspace = trash.get("workspace", {})
-            deleted_word_count = count_words(deleted_workspace.get("main_text", ""))
+        # Trash Bin notification and viewer
+        trash_items = get_trash_bin_items()
+        if trash_items:
+            # Trash bin toggle button
+            trash_button_col, _ = st.columns([1, 5])
+            with trash_button_col:
+                if st.button(
+                    f"🗑️ Trash Bin ({len(trash_items)})",
+                    help="View deleted drafts",
+                    key="toggle_trash_bin",
+                ):
+                    st.session_state._show_trash_bin = not st.session_state.get(
+                        "_show_trash_bin", False
+                    )
 
-            with st.expander(f"🗑️ Deleted Draft Available for Restore", expanded=True):
-                st.info(
-                    f"Deleted draft from {deleted_bay} bay ({deleted_word_count:,} words) can be restored."
+            # Trash bin viewer
+            if st.session_state.get("_show_trash_bin"):
+                with st.expander("🗑️ Trash Bin Contents", expanded=True):
+                    st.caption(
+                        f"Showing {len(trash_items)} deleted draft(s). Maximum 10 items kept."
+                    )
+
+                    for item in trash_items:
+                        bay = item.get("bay", "unknown")
+                        workspace = item.get("workspace", {})
+                        title = workspace.get("workspace_title", "Untitled")
+                        text = workspace.get("main_text", "")
+                        word_count = count_words(text)
+                        timestamp = item.get("timestamp", "")
+                        trash_id = item.get("id", "")
+
+                        # Format timestamp
+                        try:
+                            dt = datetime.fromisoformat(timestamp)
+                            time_str = dt.strftime("%b %d, %Y %I:%M %p")
+                        except:
+                            time_str = "Unknown date"
+
+                        st.markdown("---")
+                        st.markdown(f"**{title}** ({bay} bay)")
+                        st.caption(f"{word_count:,} words • Deleted: {time_str}")
+
+                        # Preview text (first 100 chars)
+                        preview = text[:100] + "..." if len(text) > 100 else text
+                        if preview:
+                            st.text(preview)
+
+                        # Action buttons
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button(
+                                "↶ Restore",
+                                key=f"restore_{trash_id}",
+                                help=f"Restore to {bay} bay",
+                            ):
+                                if restore_from_trash(trash_id):
+                                    st.success(f"✓ Restored to {bay} bay")
+                                    st.rerun()
+                        with col2:
+                            if st.button(
+                                "🗑️ Delete Permanently",
+                                key=f"delete_perm_{trash_id}",
+                                help="Permanently delete this draft",
+                            ):
+                                st.session_state._confirm_permanent_delete = trash_id
+
+                    # Clear all trash button
+                    st.markdown("---")
+                    if st.button(
+                        "🗑️ Empty Trash Bin", key="empty_trash_bin", type="secondary"
+                    ):
+                        clear_trash_bin()
+                        st.session_state._show_trash_bin = False
+                        st.success("✓ Trash Bin emptied")
+                        st.rerun()
+
+        # Permanent delete confirmation
+        if st.session_state.get("_confirm_permanent_delete"):
+            trash_id = st.session_state._confirm_permanent_delete
+            with st.expander("⚠️ Permanently Delete Draft?", expanded=True):
+                st.error(
+                    "This will permanently delete this draft. This action cannot be undone."
                 )
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button(
-                        "↶ Undo Delete", key="undo_delete_btn", type="primary"
+                        "✓ Delete Permanently",
+                        key="confirm_perm_delete",
+                        type="primary",
                     ):
-                        if undo_delete():
-                            st.success(f"✓ Draft restored to {deleted_bay} bay")
+                        if permanently_delete_from_trash(trash_id):
+                            st.session_state._confirm_permanent_delete = None
+                            st.success("✓ Draft permanently deleted")
                             st.rerun()
                 with col2:
-                    if st.button("🗑️ Clear Trash", key="clear_trash_btn"):
-                        st.session_state._deleted_draft_trash = None
+                    if st.button("✗ Cancel", key="cancel_perm_delete"):
+                        st.session_state._confirm_permanent_delete = None
                         st.rerun()
 
         # Export dialog
