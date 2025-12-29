@@ -1042,6 +1042,29 @@ def count_words(text: str) -> int:
     return len(text.split())
 
 
+def delete_current_draft() -> bool:
+    """Delete the current draft from the active bay."""
+    current_bay = st.session_state.get("active_bay", "NEW")
+
+    # Check if there's content to delete
+    current_text = st.session_state.get("main_text", "").strip()
+    if not current_text:
+        return False
+
+    # Clear the current session state
+    st.session_state.main_text = ""
+    st.session_state.workspace_title = ""
+    st.session_state._undo_history = [""]
+    st.session_state._redo_history = []
+
+    # Remove from active_project_by_bay if it exists
+    if current_bay in st.session_state.active_project_by_bay:
+        del st.session_state.active_project_by_bay[current_bay]
+
+    mark_dirty()
+    return True
+
+
 # ============================================================
 # BAY TRANSFER & EXPORT
 # ============================================================
@@ -1224,6 +1247,7 @@ def init_state() -> None:
         "_transfer_needs_confirmation": False,
         "_transfer_target_bay": None,
         "_show_export_dialog": False,
+        "_confirm_delete": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1908,8 +1932,8 @@ def main_ui() -> None:
 
         st.markdown("---")
 
-        # Top bar: Undo/Redo + Bay Transfer + Export
-        top_col1, top_col2, top_col3, top_col4 = st.columns([1, 1, 2, 2])
+        # Top bar: Undo/Redo + Bay Transfer + Export + Delete
+        top_col1, top_col2, top_col3, top_col4, top_col5 = st.columns([1, 1, 2, 2, 1])
 
         # Undo/Redo controls
         with top_col1:
@@ -1947,6 +1971,15 @@ def main_ui() -> None:
             else:
                 st.button("📤 Export", disabled=True, help="No text to export")
 
+        # Delete button
+        with top_col5:
+            has_text = bool(st.session_state.get("main_text", "").strip())
+            if has_text:
+                if st.button("🗑️ Delete", help="Delete current draft"):
+                    st.session_state._confirm_delete = True
+            else:
+                st.button("🗑️ Delete", disabled=True, help="No draft to delete")
+
         # Transfer confirmation dialog
         if st.session_state.get("_transfer_needs_confirmation"):
             target_bay = st.session_state.get("_transfer_target_bay")
@@ -1966,6 +1999,29 @@ def main_ui() -> None:
                     if st.button("✗ Cancel", key="cancel_transfer"):
                         st.session_state._transfer_needs_confirmation = False
                         st.session_state._transfer_target_bay = None
+                        st.rerun()
+
+        # Delete confirmation dialog
+        if st.session_state.get("_confirm_delete"):
+            current_bay = st.session_state.get("active_bay", "NEW")
+            word_count = count_words(st.session_state.get("main_text", ""))
+            with st.expander(f"⚠️ Delete Draft from {current_bay} Bay?", expanded=True):
+                st.error(
+                    f"This will permanently delete the current draft ({word_count:,} words) from the {current_bay} bay. This action cannot be undone."
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✓ Delete", key="confirm_delete_btn", type="primary"):
+                        if delete_current_draft():
+                            st.session_state._confirm_delete = False
+                            st.success(f"✓ Draft deleted from {current_bay} bay")
+                            st.rerun()
+                        else:
+                            st.session_state._confirm_delete = False
+                            st.rerun()
+                with col2:
+                    if st.button("✗ Cancel", key="cancel_delete_btn"):
+                        st.session_state._confirm_delete = False
                         st.rerun()
 
         # Export dialog
