@@ -92,6 +92,7 @@ Add to `defaults` dict in `init_state()` (~line 860). Include in `new_project_pa
 - Model: set `OPENAI_MODEL` in secrets or env
 
 ## Files
+(Plain text file references used for GitHub Copilot compatibility)
 - app.py - Entire application (single file by design)
 - autosave/olivetti_state.json - Persisted state
 - .streamlit/secrets.toml - API keys (gitignored)
