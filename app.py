@@ -2784,7 +2784,7 @@ def main_ui() -> None:
         # Get word counts for all bays
         bay_word_counts = {}
         for bay in ["ROUGH", "EDIT", "FINAL"]:
-            workspace = st.session_state.active_project_by_bay.get(bay)
+        workspace = st.session_state.active_project_by_bay.get(bay)
             if workspace:
                 bay_text = workspace.get("main_text", "")
                 bay_word_counts[bay] = count_words(bay_text)
